@@ -1,3 +1,4 @@
+#token控制
 import tiktoken
 def count_tokens(messages:list,model:str="qwen-plus") ->int:
     """
