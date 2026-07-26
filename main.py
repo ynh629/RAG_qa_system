@@ -17,6 +17,10 @@ while True:
     userinput=input("you:")
     if userinput.lower()=="exit":
         break
+    if userinput.lower()=="/reset":
+        conv.reset()
+        print("已重置对话")
+        continue
     conv.add_user_message(userinput)
     messages=conv.get_messages()
     stream=client.chat.completions.create(
