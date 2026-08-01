@@ -12,23 +12,40 @@ base_client = OpenAI(
 )
 instructor_client = instructor.from_openai(base_client,mode=instructor.Mode.JSON)
 class SentimentResult(BaseModel):
+    reasoning: str = Field(description="情感推理过程，说明从哪些词句中判断")
     sentiment: str = Field( description="情感倾向:正面，负面，中性")
     confidence: float = Field( description="情感倾向的置信度，0~1")
 #------------------工具函数---------------------
 def summarize_text(text:str,max_length:int=150) -> str:
-    system_prompt = f"你是一个文本摘要专家，请将输入的文本进行简明扼要的总结，输出字符不超过{max_length}，确保保留核心信息。"
+    system_prompt = f"""你是一位专业的文本摘要专家。请严格遵循以下规则：
+1. 阅读由三个反引号包裹的原文，提取核心信息。
+2. 生成不超过 {max_length} 字的摘要，以要点列表形式输出（每点一行，用 - 开头）。
+3. 保留关键数据、人名、时间、结论。
+4. 如果原文信息过少无法摘要，直接回答“原文内容不足以生成摘要”。
+"""
+    user_prompt = f"原文内容如下：\n```{text}```\n请根据上述规则生成摘要。"
     response=base_client.chat.completions.create(
         model="qwen-plus",
         messages=[
             {"role":"system","content":system_prompt},
-            {"role": "user", "content": text}
+            {"role": "user", "content": user_prompt}
         ],
-        temperature=0.2,
+        temperature=0,
     )
-    result = response.choices[0].message.content
-    return result
+    return response.choices[0].message.content
+    
 def classify_sentiment(text: str) -> SentimentResult:
-    system_prompt = "你是一个情感分析专家，请判断输入文本的情感倾向，并给出置信度评分。"
+    system_prompt = """你是一位资深情感分析专家。请严格按照以下两步骤分析用户文本：
+步骤1 - 推理：找出文本中表示情感的关键词、语气、表情符号，用一两句话总结你的判断依据。
+步骤2 - 输出：基于推理，输出 JSON 格式的情感标签（正面/负面/中性）和置信度（0~1）。
+
+示例：
+用户：虽然等了好久，但东西拿到手那一刻太惊喜了！
+推理：前半句“等了好久”带有轻微负面，但后面“太惊喜了”和感叹号表现出强烈正面情绪，整体偏正面。
+输出：{"sentiment":"正面","confidence":0.85}
+
+现在请分析以下文本：
+"""
     result = instructor_client.chat.completions.create(
         model="qwen-plus",
         response_model=SentimentResult,
