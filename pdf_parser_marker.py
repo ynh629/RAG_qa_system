@@ -2,10 +2,9 @@ from marker.converters.pdf import PdfConverter
 from marker.models import create_model_dict
 
 def convert_pdf_to_markdown(pdf_path, output_md="output.md"):
-    pdf_path = "年报.pdf"
     converter = PdfConverter(
         artifact_dict=create_model_dict(),
-        config={"disable_ocr": True},
+        config={"disable_ocr": True},#无显卡，暂时用不了ocr
     )
     rendered = converter(pdf_path)
     markdown_text = rendered.markdown
