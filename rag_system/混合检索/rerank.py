@@ -4,6 +4,12 @@ from typing import List, Dict, Optional
 from sentence_transformers import CrossEncoder
 import os
 
+# 当前文件所在目录
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+# 数据文件路径（位于 ../data/structured_segments.json）
+DATA_JSON = os.path.join(BASE_DIR, "..", "data", "structured_segments.json")
+
+
 class Reranker:
     """
         - 'bge': 使用 BAAI/bge-reranker-base 本地模型
@@ -102,7 +108,8 @@ if __name__ == "__main__":
         sys.exit(1)
 
     # 1. 加载数据
-    segments = chroma_load_segments("structured_segments.json")
+    segments = chroma_load_segments(DATA_JSON)
+
 
     # 2. 构建 Chroma 索引（若已有 chroma_db 可跳过）
     chroma_coll = build_chroma_index(segments)

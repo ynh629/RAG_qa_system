@@ -1,9 +1,16 @@
 #切片
 import json
+import os
 import numpy as np
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from sentence_transformers import SentenceTransformer
 from sklearn.metrics.pairwise import cosine_similarity
+
+# 当前文件所在目录
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+# 数据文件路径（位于 ../data/structured_segments.json）
+DATA_JSON = os.path.join(BASE_DIR, "..", "data", "structured_segments.json")
+
 def load_text_from_segments(json_path):
     with open(json_path, "r", encoding="utf-8") as f:
         segments = json.load(f)
@@ -54,7 +61,8 @@ def semantic_chunking(text,model_name="BAAI/bge-small-zh-v1.5",threshold=0.5):
     return chunks
 # -----------------------对比实验主程序--------------------------
 if __name__ == "__main__":
-    full_text = load_text_from_segments("structured_segments.json")
+    full_text = load_text_from_segments(DATA_JSON)
+
     print(f"原始文本总长度: {len(full_text)} 字符\n")
     # 测试不同参数的 RecursiveCharacterTextSplitter
     print("=" * 50)

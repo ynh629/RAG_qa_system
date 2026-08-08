@@ -1,7 +1,14 @@
 import json
+import os
 import jieba
 from rank_bm25 import BM25Okapi
 from typing import List, Dict, Tuple
+
+# 当前文件所在目录
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+# 数据文件路径（位于 ../data/structured_segments.json）
+DATA_JSON = os.path.join(BASE_DIR, "..", "data", "structured_segments.json")
+
 
 class BM25Retriever:
     """
@@ -67,7 +74,8 @@ def load_documents_from_segments(json_path: str) -> List[str]:
 # --------------------------- 主程序 ---------------------------
 if __name__ == "__main__":
     # 1. 加载文档（使用之前 parse_pdf.py 生成的 structured_segments.json）
-    docs = load_documents_from_segments("structured_segments.json") 
+    docs = load_documents_from_segments(DATA_JSON) 
+
     # 2. 构建 BM25 索引
     bm25_retriever = BM25Retriever(docs)
     print("BM25 索引构建完成\n")

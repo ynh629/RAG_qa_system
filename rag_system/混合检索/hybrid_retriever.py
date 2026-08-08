@@ -1,8 +1,15 @@
 # hybrid_retriever.py
+import os
 import numpy as np
 from typing import List, Dict, Optional, Tuple
 from chroma import load_segments, build_chroma_index, search_similar 
 from bm25 import BM25Retriever  # 你之前写的类
+
+# 当前文件所在目录
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+# 数据文件路径（位于 ../data/structured_segments.json）
+DATA_JSON = os.path.join(BASE_DIR, "..", "data", "structured_segments.json")
+
 
 class HybridRetriever:
     def __init__(self, chroma_collection, bm25_retriever: BM25Retriever):
@@ -141,7 +148,8 @@ class HybridRetriever:
 # --------------------------- 主程序 ---------------------------
 if __name__ == "__main__":
     # 1. 加载数据（复用 chroma.py 里的 load_segments）
-    segments = load_segments("structured_segments.json")
+    segments = load_segments(DATA_JSON)
+
 
     # 2. 构建 Chroma 向量索引
     print("正在构建向量索引...")

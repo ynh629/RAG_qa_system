@@ -6,6 +6,12 @@ from openai import OpenAI
 from hybrid_retriever import HybridRetriever
 from rerank import Reranker
 load_dotenv()
+
+# 当前文件所在目录
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+# 数据文件路径（位于 ../data/structured_segments.json）
+DATA_JSON = os.path.join(BASE_DIR, "..", "data", "structured_segments.json")
+
 llm_client = OpenAI(
     api_key=os.getenv("qwen_api_key"),
     base_url="https://dashscope.aliyuncs.com/compatible-mode/v1"
@@ -92,7 +98,8 @@ if __name__ == "__main__":
     from bm25 import BM25Retriever
 
     # 1. 加载文档片段
-    segments = load_segments("structured_segments.json")
+    segments = load_segments(DATA_JSON)
+
 
     # 2. 构建 Chroma 向量索引
     print("正在构建 Chroma 索引...")

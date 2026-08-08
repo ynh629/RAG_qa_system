@@ -1,7 +1,16 @@
 import json
+import os
 import chromadb
 from chromadb.utils import embedding_functions
 from typing import List, Dict
+
+# 当前文件所在目录
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+# 数据文件路径（位于 ../data/structured_segments.json）
+DATA_JSON = os.path.join(BASE_DIR, "..", "data", "structured_segments.json")
+# Chroma 数据库路径（位于 ../chroma_db）
+CHROMA_DIR = os.path.join(BASE_DIR, "..", "chroma_db")
+
 
 # --------------------------- 1、引入数据 ---------------------------
 def load_segments(json_path: str) -> List[Dict]:
@@ -19,8 +28,9 @@ def build_chroma_index(segments: List[Dict], collection_name: str = "annual_repo
     使用 Chroma 构建向量索引。
     返回：collection 对象，可用于检索。
     """
-    # 创建 Chroma 客户端（数据会持久化到 ./chroma_db 目录）
-    client = chromadb.PersistentClient(path="./chroma_db")
+    # 创建 Chroma 客户端（数据会持久化到 ../chroma_db 目录）
+    client = chromadb.PersistentClient(path=CHROMA_DIR)
+
     
     # 定义 embedding 函数（使用 BGE 中文小模型，首次会自动下载）
     # 变量：embedding 函数，负责将文本转为向量
@@ -85,7 +95,8 @@ def search_similar(query: str, collection, top_k: int = 3):
 # --------------------------- 4. 主程序 ---------------------------
 if __name__ == "__main__":
     # 步骤1：加载片段
-    segments = load_segments("structured_segments.json")
+    segments = load_segments(DATA_JSON)
+
     
     # 步骤2：构建索引
     collection = build_chroma_index(segments)

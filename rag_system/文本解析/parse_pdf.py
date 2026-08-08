@@ -112,19 +112,26 @@ def parse_pdf_to_segments(pdf_path, mode="leaf", target_level=None, md_text=None
 
 if __name__ == "__main__":
     import json
+    import os
+    # 当前文件所在目录
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    pdf_path = os.path.join(base_dir, "年报.pdf")
+    output_md = os.path.join(base_dir, "output.md")
+    output_json = os.path.join(base_dir, "..", "data", "structured_segments.json")
     # 1. 只转换一次 Marker，结果同时用于切分和导出
-    md_raw = pdf_to_markdown_text(r"c:\Users\Administrator\Desktop\python\文本解析+markdown切分\年报.pdf")
+    md_raw = pdf_to_markdown_text(pdf_path)
     # 2. 示例：使用 leaf 模式（最小粒度），也可以改成 mode="level", target_level=2 来按二级标题切
-    segments = parse_pdf_to_segments(r"c:\Users\Administrator\Desktop\python\文本解析+markdown切分\年报.pdf", mode="leaf", md_text=md_raw)
+    segments = parse_pdf_to_segments(pdf_path, mode="leaf", md_text=md_raw)
     # 3. 导出归一化后的 Markdown 文件（用于检查）
     md_normalized = normalize_heading_levels(md_raw)
-    with open(r"c:\Users\Administrator\Desktop\python\文本解析+markdown切分\output.md", "w", encoding="utf-8") as f:
+    with open(output_md, "w", encoding="utf-8") as f:
         f.write(md_normalized)
     # 4. 保存结构化片段
-    with open(r"c:\Users\Administrator\Desktop\python\文本解析+markdown切分\structured_segments.json", "w", encoding="utf-8") as f:
+    with open(output_json, "w", encoding="utf-8") as f:
         json.dump(segments, f, ensure_ascii=False, indent=2)
 
-    print(f"解析完成，共 {len(segments)} 个片段，结果保存在 structured_segments.json")
+    print(f"解析完成，共 {len(segments)} 个片段，结果保存在 {output_json}")
+
 
 
 
