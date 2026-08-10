@@ -13,12 +13,22 @@
 │  (Marker)    │    │  (Markdown标题)   │    │  .json               │
 └──────────────┘    └──────────────────┘    └──────────┬──────────┘
                                                         │
-                          ┌─────────────────────────────┼─────────────────────────────┐
-                          ▼                                                           ▼
-                 ┌─────────────────┐                                         ┌─────────────────┐
-                 │  BM25 关键词检索 │                                         │  Chroma 向量检索  │
-                 │  (jieba+rank_bm25)│                                        │  (BGE Embedding) │
-                 └────────┬────────┘                                         └────────┬────────┘
+                                          ┌─────────────┴─────────────┐
+                                          ▼                           ▼
+                              ┌─────────────────────────┐   ┌─────────────────────────┐
+                              │ 高级切分（pipeline.py 中  │   │ 保持原样                 │
+                              │  用户选择）               │   │ (MarkdownHeadingSplitter)│
+                              │ · 递归字符切分            │   │                         │
+                              │ · 语义切分               │   │                         │
+                              └────────────┬────────────┘   └────────────┬────────────┘
+                                           └───────────────┬─────────────┘
+                                                           ▼
+                          ┌────────────────────────────────┼────────────────────────────────┐
+                          ▼                                                               ▼
+                 ┌─────────────────┐                                              ┌─────────────────┐
+                 │  BM25 关键词检索 │                                              │  Chroma 向量检索  │
+                 │  (jieba+rank_bm25)│                                              │  (BGE Embedding) │
+                 └────────┬────────┘                                              └────────┬────────┘
                           │                                                           │
                           └──────────────────┬────────────────────────────────────────┘
                                              ▼
@@ -47,6 +57,8 @@
 
 ```
 rag_system/
+├── pipeline.py                # 统一管线入口：解析 PDF → 选择切分策略 → 问答
+│
 ├── 文本解析/                  # PDF 解析与结构化切分
 │   ├── parse_pdf.py           # 主入口：Marker 转换 + 标题归一化 + 结构切片
 │   ├── markdown_splitter.py   # MarkdownHeadingSplitter：按标题层级切分，保留标题路径
@@ -99,10 +111,11 @@ rag_system/
 
 ### 文本切分对比
 
-`advanced_splitting.py` 用于实验对比不同切分策略：
+`advanced_splitting.py` 用于实验对比不同切分策略，也供统一管线 `pipeline.py` 调用：
 
-- **递归字符切分**（`RecursiveCharacterTextSplitter`）：按分隔符优先级递归切分，测试了 chunk_size 500/1000/1500 三组参数
+- **递归字符切分**（`run_recursive_splitter` / `RecursiveCharacterTextSplitter`）：按分隔符优先级递归切分，测试了 chunk_size 500/1000/1500 三组参数
 - **语义切分**（`semantic_chunking`）：基于句子向量的余弦相似度，在相似度低于阈值处断句，使用 BGE 中文模型编码
+- **集成入口**（`apply_advanced_splitting`）：读取 `structured_segments.json`，按 `method="recursive" | "semantic"` 重新切分，并把每个块基于字符偏移量映射回原始片段的 `title_path` / `level` / `page`，结果保存为 `data/chunks_recursive.json` 或 `data/chunks_semantic.json`，可直接供 QA 系统加载
 
 ### 混合检索
 
@@ -185,6 +198,24 @@ LOG_LEVEL=INFO
 
 ### 运行流程
 
+**方式一：统一管线（推荐）**
+
+```bash
+# 一条命令完成：解析 PDF → 选择切分策略（原样/递归/语义）→ 交互式问答
+python pipeline.py
+```
+
+运行时会依次：
+1. 若 `data/structured_segments.json` 不存在，自动解析 `文本解析/年报.pdf`
+2. 交互选择切分策略：
+   - `[0]` 保持原样（MarkdownHeadingSplitter 标题结构切分）
+   - `[1]` 递归字符切分（可调 `chunk_size` / `chunk_overlap`）
+   - `[2]` 语义切分（可调 `threshold`）
+3. 按选择生成 `data/chunks_recursive.json` 或 `data/chunks_semantic.json`
+4. 构建索引并进入交互式问答（输入 `exit` / `quit` / `退出` 结束）
+
+**方式二：分步运行**
+
 ```bash
 # 1. 解析 PDF 年报，生成结构化片段
 python 文本解析/parse_pdf.py
@@ -192,8 +223,11 @@ python 文本解析/parse_pdf.py
 # 2. 切分策略对比实验（可选）
 python 文本切分/advanced_splitting.py
 
-# 3. 运行完整问答系统
+# 3. 运行完整问答系统（默认使用 structured_segments.json）
 python 混合检索/qa_system.py
+
+#    也可指定切分后的数据文件：
+python 混合检索/qa_system.py --data-json data/chunks_recursive.json
 
 # 4. 运行边界测试
 python 测试/edge_case_test.py

@@ -236,14 +236,30 @@ class QASystem:
         return result
 
 
-# --------------------------- 主程序 ---------------------------
-if __name__ == "__main__":
+def run_qa_pipeline(
+    data_json: str = DATA_JSON,
+    interactive: bool = False,
+    test_questions: Optional[List[str]] = None,
+) -> QASystem:
+    """
+    完整问答管线：加载数据 → 构建索引 → 创建问答系统 → 回答问题。
+
+    参数：
+        data_json: 结构化片段 JSON 路径（默认为 structured_segments.json，
+                   也可传入高级切分后的 chunks_recursive.json / chunks_semantic.json）
+        interactive: 是否进入交互式问答循环（输入 exit/quit 退出）
+        test_questions: interactive=False 时使用的问题列表（默认使用内置测试问题）
+
+    返回：
+        QASystem 实例，便于外部继续调用 answer()
+    """
     # 导入数据加载和索引构建函数
     from chroma import load_segments, build_chroma_index
     from bm25 import BM25Retriever
 
     # 1. 加载文档片段
-    segments = load_segments(DATA_JSON)
+    segments = load_segments(data_json)
+    print(f"\n已加载 {len(segments)} 个文本片段（来源: {data_json}）")
 
     # 2. 构建 Chroma 向量索引
     print("正在构建 Chroma 索引...")
@@ -264,20 +280,69 @@ if __name__ == "__main__":
     # 6. 创建完整问答系统
     qa = QASystem(hybrid, reranker)
 
-    # 7. 测试提问
-    test_questions = [
-        "公司2025年的净利润是多少？",
-        "有哪些股东持股比例超过5%？",
-        "公司面临的主要风险是什么？"
-    ]
+    # 7. 问答环节
+    if interactive:
+        _run_interactive_qa(qa)
+    else:
+        questions = test_questions or [
+            "公司2025年的净利润是多少？",
+            "有哪些股东持股比例超过5%？",
+            "公司面临的主要风险是什么？"
+        ]
+        for question in questions:
+            print(f"\n{'='*60}")
+            print(f"问题：{question}")
+            result = qa.answer(question)
+            print(f"\n答案：\n{result['answer']}")
+            if result.get("sources"):
+                print("\n参考来源：")
+                for i, src in enumerate(result["sources"]):
+                    print(f"  {i+1}. {src['title_path']} (重排序分数：{src['rerank_score']:.4f})")
+                    print(f"     内容片段：{src['text_snippet']}...")
 
-    for question in test_questions:
-        print(f"\n{'='*60}")
-        print(f"问题：{question}")
-        result = qa.answer(question)
+    return qa
+
+
+def _run_interactive_qa(qa: QASystem) -> None:
+    """交互式问答循环，输入 exit / quit / 退出 结束。"""
+    print("\n" + "=" * 60)
+    print("问答系统已就绪，输入问题开始提问（输入 exit / quit / 退出 结束）")
+    print("=" * 60)
+    while True:
+        try:
+            query = input("\n问题: ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print("\n退出问答。")
+            break
+        if not query:
+            continue
+        if query.lower() in ("exit", "quit", "q", "退出"):
+            print("退出问答。")
+            break
+        result = qa.answer(query)
         print(f"\n答案：\n{result['answer']}")
         if result.get("sources"):
             print("\n参考来源：")
             for i, src in enumerate(result["sources"]):
                 print(f"  {i+1}. {src['title_path']} (重排序分数：{src['rerank_score']:.4f})")
                 print(f"     内容片段：{src['text_snippet']}...")
+
+
+# --------------------------- 主程序 ---------------------------
+if __name__ == "__main__":
+    import argparse
+
+    parser = argparse.ArgumentParser(description="年报智能问答系统")
+    parser.add_argument(
+        "--data-json",
+        default=DATA_JSON,
+        help=f"结构化片段 JSON 路径（默认: {DATA_JSON}，可传 chunks_recursive.json 等）",
+    )
+    parser.add_argument(
+        "--interactive",
+        action="store_true",
+        help="进入交互式问答循环（默认运行内置测试问题）",
+    )
+    args = parser.parse_args()
+
+    run_qa_pipeline(data_json=args.data_json, interactive=args.interactive)
