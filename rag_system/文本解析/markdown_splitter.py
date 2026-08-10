@@ -1,11 +1,23 @@
+import os
 import re
+import sys
 from typing import List, Dict, Optional
+
+# 确保可以导入上级目录的公共模块（日志、异常）
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from 系统日志.config import get_logger
+
+logger = get_logger(__name__)
+
+
 class MarkdownHeadingSplitter:       # Markdown 结构切片器：按标题层级切分，保留上下文
     def __init__(self, text: str):
-        self.text = text
-        self.lines = text.splitlines(keepends=True)  # 保留换行符
+        self.text = text or ""
+        self.lines = self.text.splitlines(keepends=True)  # 保留换行符
         self.headings = self._parse_headings()
-#-----------------------------文档分析----------------------------------  
+
+    # -----------------------------文档分析----------------------------------
     def _parse_headings(self) -> List[Dict]:
         """
         解析所有标题行，返回列表，每个元素包含：
@@ -31,27 +43,36 @@ class MarkdownHeadingSplitter:       # Markdown 结构切片器：按标题层�
                     "start_pos": char_count
                 })
             char_count += len(line)
+        logger.info("解析到 %d 个标题", len(headings))
         return headings
-#----------------------------切分--------------------------------------- 
+
+    # ----------------------------切分---------------------------------------
     def split_by_headings(self, mode: str = "leaf", target_level: Optional[int] = None) -> List[Dict]:
         """
-        按标题层级切分 Markdown，返回结构化片段列表。   
+        按标题层级切分 Markdown，返回结构化片段列表。
         参数：
             mode: 切分模式
                 - "leaf": 叶节点模式，返回最底层的标题区域作为块。
                 - "level": 层级模式，按 target_level 切分（如 target_level=2 时按 ## 切）。
-            target_level: 仅在 mode="level" 时有效，指定切割的标题级别        
+            target_level: 仅在 mode="level" 时有效，指定切割的标题级别
         返回：片段列表，每个片段包含：
             - title_path: List[str]   标题路径（父标题链）
             - content: str            Markdown 内容
             - level: int              当前标题级别
             - page: None              预留页码
         """
+        # 空文本保护
+        if not self.text or not self.text.strip():
+            logger.warning("输入文本为空，返回空片段列表")
+            return []
+
         if not self.headings:
-            return [{"title_path": [], "content": self.text, "level": 0, "page": None}]
-        
+            logger.warning("文档无任何标题，返回整篇作为单个片段")
+            return [{"title_path": [], "content": self.text.strip(), "level": 0, "page": None}]
+
         # 变量：结果片段列表
         fragments = []
+
         # 辅助函数：根据层级计算父标题路径
         def get_title_path(index):
             """根据标题索引，回溯构建父标题链。"""
@@ -64,11 +85,10 @@ class MarkdownHeadingSplitter:       # Markdown 结构切片器：按标题层�
                     current_level = self.headings[i]["level"]
             path.append(self.headings[index]["title"])
             return path
-        
+
         # 根据模式选择要输出的标题索引
         if mode == "leaf":
             # 叶节点：找出所有“没有更低级标题”的标题
-            # 即当前标题级别 >= 紧跟在它后面的标题级别（如果有），或者它是最后一个标题
             leaf_indices = []
             for i, h in enumerate(self.headings):
                 if i == len(self.headings) - 1:
@@ -92,14 +112,18 @@ class MarkdownHeadingSplitter:       # Markdown 结构切片器：按标题层�
                 # 变量：切片内容的行列表，不包含标题行本身
                 content_lines = self.lines[content_start:content_end]
                 content = "".join(content_lines).strip()
-                
+
+                # 过滤空内容片段
+                if not content:
+                    continue
+
                 fragments.append({
                     "title_path": get_title_path(idx),
                     "content": content,
                     "level": self.headings[idx]["level"],
                     "page": None
                 })
-                
+
         elif mode == "level":
             if target_level is None:
                 raise ValueError("target_level must be specified in 'level' mode")
@@ -116,7 +140,11 @@ class MarkdownHeadingSplitter:       # Markdown 结构切片器：按标题层�
                             break
                     content_lines = self.lines[content_start:content_end]
                     content = "".join(content_lines).strip()
-                    
+
+                    # 过滤空内容片段
+                    if not content:
+                        continue
+
                     fragments.append({
                         "title_path": get_title_path(i),
                         "content": content,
@@ -125,5 +153,6 @@ class MarkdownHeadingSplitter:       # Markdown 结构切片器：按标题层�
                     })
         else:
             raise ValueError(f"Unsupported mode: {mode}")
-        
+
+        logger.info("切分完成（mode=%s），共 %d 个片段", mode, len(fragments))
         return fragments

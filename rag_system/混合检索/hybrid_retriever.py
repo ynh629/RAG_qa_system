@@ -1,14 +1,35 @@
 # hybrid_retriever.py
 import os
+import sys
 import numpy as np
 from typing import List, Dict, Optional, Tuple
-from chroma import load_segments, build_chroma_index, search_similar 
+
+# 确保可以导入同目录模块
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+# 确保可以导入上级目录的公共模块（日志、异常）
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from chroma import load_segments, build_chroma_index, search_similar
 from bm25 import BM25Retriever  # 你之前写的类
+from 系统日志.config import get_logger
+from 异常处理.exceptions import RetrievalError
 
 # 当前文件所在目录
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 # 数据文件路径（位于 ../data/structured_segments.json）
 DATA_JSON = os.path.join(BASE_DIR, "..", "data", "structured_segments.json")
+
+logger = get_logger(__name__)
+
+
+def _make_key(text: str, doc_id: Optional[str] = None) -> str:
+    """
+    生成用于融合去重的稳定键。
+    优先使用文档 id；若无 id，则使用文本哈希 + 前 50 字符，降低碰撞风险。
+    """
+    if doc_id:
+        return f"id:{doc_id}"
+    return f"hash:{hash(text)}:{text[:50]}"
 
 
 class HybridRetriever:
@@ -22,43 +43,81 @@ class HybridRetriever:
         top_k: int = 5,
         method: str = "weighted",
         weights: Tuple[float, float] = (0.6, 0.4),
-        candidate_k: int = 20  #每种检索器初筛的候选数量
+        candidate_k: int = 20  # 每种检索器初筛的候选数量
     ) -> List[Dict]:
+        # 输入校验
+        if not query or not query.strip():
+            logger.warning("收到空查询，返回空结果")
+            return []
+
         # 1. 向量检索，获取候选集
         vec_results = self._retrieve_from_chroma(query, candidate_k)
         # 2. BM25 检索，获取候选集
-        bm25_results = self.bm25.search(query, top_k=candidate_k)  # 返回包含 doc_index, score, text 
+        bm25_results = self.bm25.search(query, top_k=candidate_k)  # 返回包含 doc_index, score, text
+
+        logger.info(
+            "混合检索 query=%r 向量召回=%d BM25召回=%d",
+            query[:50], len(vec_results), len(bm25_results)
+        )
+
+        # 两个检索器都无结果时，直接返回空
+        if not vec_results and not bm25_results:
+            logger.warning("向量与BM25均无召回结果，query=%r", query[:50])
+            return []
+
         # 4. 根据method融合
         if method == "weighted":
             merged = self._weighted_fusion(vec_results, bm25_results, weights)
         elif method == "rrf":
             merged = self._rrf_fusion(vec_results, bm25_results, k=60)
         else:
-            raise ValueError(f"不支持的融合方法: {method}")
+            raise RetrievalError(
+                f"不支持的融合方法: {method}",
+                code="UNSUPPORTED_METHOD"
+            )
 
         # 5. 按融合分数降序排序，截取 top_k
         merged.sort(key=lambda x: x["score"], reverse=True)
-        return merged[:top_k]
+        result = merged[:top_k]
+        logger.info("混合检索完成，返回 %d 条结果", len(result))
+        return result
 
     def _retrieve_from_chroma(self, query: str, n_results: int) -> List[Dict]:
         """调用 Chroma 检索，返回标准化结果列表。"""
-        raw = self.chroma_collection.query(
-            query_texts=[query],
-            n_results=n_results
-        )
+        try:
+            raw = self.chroma_collection.query(
+                query_texts=[query],
+                n_results=n_results
+            )
+        except Exception as e:
+            logger.error("Chroma 查询失败: %s", e, exc_info=True)
+            return []
+
         results = []
-        if raw["ids"][0]:
-            for i in range(len(raw["ids"][0])):
-                # Chroma 返回的距离是余弦距离 (0~2)，越小越相似
-                dist = raw["distances"][0][i]
-                # 转换为相似度（1 - 距离/2）或 1/(1+dist)，这里用 1 - dist/2 映射到 [0,1]
-                sim = 1.0 - dist / 2.0
-                results.append({
-                    "id": raw["ids"][0][i],
-                    "score": sim,          # 相似度，越大越好
-                    "text": raw["documents"][0][i],
-                    "metadata": raw["metadatas"][0][i] if raw["metadatas"] else {}
-                })
+        try:
+            ids = raw.get("ids", [[]])[0]
+            distances = raw.get("distances", [[]])[0]
+            documents = raw.get("documents", [[]])[0]
+            metadatas = raw.get("metadatas", [None])[0]
+        except (IndexError, KeyError, TypeError) as e:
+            logger.error("Chroma 返回结果格式异常: %s", e, exc_info=True)
+            return []
+
+        if not ids:
+            return []
+
+        for i in range(len(ids)):
+            # Chroma 返回的距离是余弦距离 (0~2)，越小越相似
+            dist = distances[i] if i < len(distances) else 1.0
+            # 转换为相似度（1 - 距离/2）映射到 [0,1]
+            sim = 1.0 - dist / 2.0
+            meta = metadatas[i] if metadatas and i < len(metadatas) else {}
+            results.append({
+                "id": ids[i],
+                "score": sim,          # 相似度，越大越好
+                "text": documents[i] if i < len(documents) else "",
+                "metadata": meta if isinstance(meta, dict) else {}
+            })
         return results
 
     def _weighted_fusion(
@@ -68,11 +127,11 @@ class HybridRetriever:
         weights: Tuple[float, float]
     ) -> List[Dict]:
         """加权分数融合。"""
-        # 归一化向量相似度到 [0,1]（可能已经近似了，但确保）
-        vec_scores = np.array([r["score"] for r in vec_results])
-        bm25_scores = np.array([r["score"] for r in bm25_results])
+        # 归一化向量相似度到 [0,1]
+        vec_scores = np.array([r["score"] for r in vec_results]) if vec_results else np.array([])
+        bm25_scores = np.array([r["score"] for r in bm25_results]) if bm25_results else np.array([])
 
-        # Min-Max 归一化，如果只有一个值或全相同，避免除以0
+        # Min-Max 归一化，空数组或全相同值时安全处理
         def safe_minmax(arr):
             if len(arr) == 0:
                 return arr
@@ -84,14 +143,12 @@ class HybridRetriever:
         vec_norm = safe_minmax(vec_scores)
         bm25_norm = safe_minmax(bm25_scores)
 
-        # 构建以文档标识为键的分数映射（使用文本哈希或 id）
-        # 为方便，我们使用文本内容的前100字符或实际存储的 id。
-        # 这里用文本内容的前100字符作为近似键（实际应用中最好用统一 ID）
+        # 构建以稳定键为标识的分数映射
         merged_dict = {}
 
         def add_to_dict(results, norm_scores, weight, source):
             for res, norm_score in zip(results, norm_scores):
-                key = res["text"][:200]  # 截取前200字符作为键（谨慎，可能碰撞）
+                key = _make_key(res["text"], res.get("id"))
                 if key not in merged_dict:
                     merged_dict[key] = {
                         "text": res["text"],
@@ -131,12 +188,12 @@ class HybridRetriever:
         rrf_scores = {}
         # 处理向量结果
         for rank, res in enumerate(vec_sorted, start=1):
-            key = res["text"][:200]  # 使用文本前200字符作为键
+            key = _make_key(res["text"], res.get("id"))
             rrf_scores.setdefault(key, {"text": res["text"], "metadata": res.get("metadata", {}), "score": 0.0})
             rrf_scores[key]["score"] += 1.0 / (k + rank)
         # 处理 BM25 结果
         for rank, res in enumerate(bm25_sorted, start=1):
-            key = res["text"][:200]
+            key = _make_key(res["text"], res.get("id"))
             rrf_scores.setdefault(key, {"text": res["text"], "metadata": res.get("metadata", {}), "score": 0.0})
             rrf_scores[key]["score"] += 1.0 / (k + rank)
 
@@ -145,11 +202,12 @@ class HybridRetriever:
             for key, val in rrf_scores.items()
         ]
         return merged
+
+
 # --------------------------- 主程序 ---------------------------
 if __name__ == "__main__":
     # 1. 加载数据（复用 chroma.py 里的 load_segments）
     segments = load_segments(DATA_JSON)
-
 
     # 2. 构建 Chroma 向量索引
     print("正在构建向量索引...")
@@ -157,7 +215,6 @@ if __name__ == "__main__":
 
     # 3. 构建 BM25 索引
     print("正在构建 BM25 索引...")
-    # 提取文档内容列表（与向量库中的顺序一致）
     documents = [seg["content"] for seg in segments]
     bm25_retriever = BM25Retriever(documents)
 

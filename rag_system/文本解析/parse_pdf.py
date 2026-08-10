@@ -1,27 +1,92 @@
 import os
 import re
+import sys
 from marker.converters.pdf import PdfConverter
 from marker.models import create_model_dict
 from markdown_splitter import MarkdownHeadingSplitter
 
+# 确保可以导入上级目录的公共模块（日志、异常）
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from 系统日志.config import get_logger
+from 异常处理.exceptions import DocumentError
+
+logger = get_logger(__name__)
+
+
 def pdf_to_markdown_text(pdf_path):
     """使用 Marker 将 PDF 转换为 Markdown 文本。"""
-    converter = PdfConverter(
-        artifact_dict=create_model_dict(),
-        config={"disable_ocr": True},   # 电脑无显卡，暂时用不了 OCR
-    )
-    rendered = converter(pdf_path)
-    return rendered.markdown   # 全量 Markdown 字符串
+    if not pdf_path or not os.path.exists(pdf_path):
+        raise DocumentError(
+            f"PDF 文件不存在: {pdf_path}",
+            code="PDF_FILE_NOT_FOUND"
+        )
+    try:
+        converter = PdfConverter(
+            artifact_dict=create_model_dict(),
+            config={"disable_ocr": True},   # 电脑无显卡，暂时用不了 OCR
+        )
+        rendered = converter(pdf_path)
+        return rendered
+    except Exception as e:
+        raise DocumentError(
+            f"Marker 转换 PDF 失败: {pdf_path}",
+            code="PDF_CONVERT_ERROR",
+            detail=str(e)
+        )
 
-def _is_numbered_heading(content):#归一化辅助函数
+
+def add_page_numbers_to_segments(segments, rendered):
+    """
+    根据 Marker 的 metadata.table_of_contents 为每个片段标注页码。
+    参数：
+        segments: 切分好的片段列表（每个有 "title_path" 字段）
+        rendered: Marker 返回的完整对象（含 metadata）
+    """
+    # 从 metadata 中提取目录（标题 -> 页码映射）
+    metadata = getattr(rendered, "metadata", None) or {}
+    toc = metadata.get("table_of_contents", []) if isinstance(metadata, dict) else []
+    # 变量：标题 -> 页码（page_id 是 0 索引，转成 1 索引）
+    title_page_map = {}
+    for item in toc:
+        if not isinstance(item, dict):
+            continue
+        title = item.get("title", "").strip()
+        page_id = item.get("page_id")
+        if title and page_id is not None:
+            title_page_map[title] = page_id + 1
+
+    def _normalize(s):
+        """去除多余空白，便于匹配。"""
+        return " ".join(s.split())
+
+    def find_page(title_path):
+        """在 title_path 中从后往前查找匹配的标题页码。"""
+        for title in reversed(title_path):
+            norm_title = _normalize(title)
+            # 精确匹配
+            if norm_title in title_page_map:
+                return title_page_map[norm_title]
+            # 前缀匹配（标题可能被截断或归一化）
+            for toc_title, page in title_page_map.items():
+                norm_toc = _normalize(toc_title)
+                if norm_title.startswith(norm_toc) or norm_toc.startswith(norm_title):
+                    return page
+        return None
+
+    for seg in segments:
+        seg["page"] = find_page(seg.get("title_path", []))
+
+    return segments
+
+
+def _is_numbered_heading(content):  # 归一化辅助函数
     """
     判断数字序号后的内容是否为"标题"而非正文。
     标题特征：标题部分（到第一个句号/逗号/冒号为止）较短，且不含财务数据、不含多个数字列举。
     正文特征：标题部分很长，或包含小数/货币单位/百分比等财务数据，或包含多个数字列举（如年份列表）。
     """
     # 取到第一个句子结束符（。！？）或冒号为止的"标题部分"。
-    # 注意：逗号若夹在数字之间（如 96,516,658.96 的千分位分隔符）不算句子分隔，
-    # 因此用 (?<!\d),(?!\d) 只匹配"非数字间的逗号"。
     title_part = re.split(r'[。！？:：]|(?<!\d),(?!\d)', content)[0].strip()
 
     # 标题部分过长（超过45字）则视为正文
@@ -35,7 +100,8 @@ def _is_numbered_heading(content):#归一化辅助函数
         return False
     return True
 
-def normalize_heading_levels(md_text):  #第一次没有归一化，导致二级标题识别不精确，因此导入归一化函数
+
+def normalize_heading_levels(md_text):  # 第一次没有归一化，导致二级标题识别不精确，因此导入归一化函数
     """
     将 Marker 输出的不统一标题级别，归一化为统一结构：
     - `第X节 ...`            -> `# `  （一级，章节）
@@ -44,6 +110,10 @@ def normalize_heading_levels(md_text):  #第一次没有归一化，导致二级
     - `数字.数字 ...`（短标题）-> `### `（三级）
     - 其余被误标为标题的 `#`/`####` 行（句号结尾的正文、√适用等）-> 降为正文
     """
+    if not md_text:
+        logger.warning("normalize_heading_levels 收到空文本")
+        return ""
+
     out = []
     for line in md_text.splitlines():
         stripped = line.strip()
@@ -88,27 +158,33 @@ def normalize_heading_levels(md_text):  #第一次没有归一化，导致二级
     return '\n'.join(out)
 
 
-def parse_pdf_to_segments(pdf_path, mode="leaf", target_level=None, md_text=None):
+def parse_pdf_to_segments(pdf_path, mode="leaf", target_level=None, rendered=None):
     """
     基于 Marker 的 PDF 解析，返回结构化片段。
     参数：
         pdf_path: PDF 文件路径
         mode: "leaf" 或 "level"
         target_level: mode="level" 时指定切分的标题级别（如2表示按##切）
-        md_text: 可选，已转换好的 Markdown 全文；若传入则跳过 Marker 转换
+        rendered: 可选，已转换好的 Marker 对象；若传入则跳过 Marker 转换
     """
-    # 1. Marker 转换（仅在未传入 md_text 时执行，避免重复转换）
-    if md_text is None:
-        md_text = pdf_to_markdown_text(pdf_path)
+    # 1. Marker 转换（仅在未传入 rendered 时执行，避免重复转换）
+    if rendered is None:
+        rendered = pdf_to_markdown_text(pdf_path)
+    md_text = getattr(rendered, "markdown", None) or ""
+    if not md_text.strip():
+        raise DocumentError(
+            "Marker 转换结果为空，PDF 可能无法解析",
+            code="PDF_EMPTY_RESULT"
+        )
     # 2. 标题归一化
     md_text = normalize_heading_levels(md_text)
     # 3. 使用 MarkdownHeadingSplitter 进行结构切片
     splitter = MarkdownHeadingSplitter(md_text)
     segments = splitter.split_by_headings(mode=mode, target_level=target_level)
-    # 4. 页码占位保留（可从 Marker 的 page_blocks 补全）
-    for seg in segments:
-        seg["page"] = None
+    segments = add_page_numbers_to_segments(segments, rendered)
+    logger.info("PDF 解析完成，共 %d 个片段", len(segments))
     return segments
+
 
 if __name__ == "__main__":
     import json
@@ -119,11 +195,11 @@ if __name__ == "__main__":
     output_md = os.path.join(base_dir, "output.md")
     output_json = os.path.join(base_dir, "..", "data", "structured_segments.json")
     # 1. 只转换一次 Marker，结果同时用于切分和导出
-    md_raw = pdf_to_markdown_text(pdf_path)
+    rendered = pdf_to_markdown_text(pdf_path)
     # 2. 示例：使用 leaf 模式（最小粒度），也可以改成 mode="level", target_level=2 来按二级标题切
-    segments = parse_pdf_to_segments(pdf_path, mode="leaf", md_text=md_raw)
+    segments = parse_pdf_to_segments(pdf_path, mode="leaf", rendered=rendered)
     # 3. 导出归一化后的 Markdown 文件（用于检查）
-    md_normalized = normalize_heading_levels(md_raw)
+    md_normalized = normalize_heading_levels(rendered.markdown)
     with open(output_md, "w", encoding="utf-8") as f:
         f.write(md_normalized)
     # 4. 保存结构化片段
@@ -131,7 +207,3 @@ if __name__ == "__main__":
         json.dump(segments, f, ensure_ascii=False, indent=2)
 
     print(f"解析完成，共 {len(segments)} 个片段，结果保存在 {output_json}")
-
-
-
-

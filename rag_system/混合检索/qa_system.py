@@ -1,10 +1,20 @@
 # qa_system.py
 import os
-from typing import List, Dict
+import sys
+from typing import List, Dict, Optional
 from dotenv import load_dotenv
 from openai import OpenAI
+
+# 确保可以导入同目录模块
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+# 确保可以导入上级目录的公共模块（日志、异常）
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 from hybrid_retriever import HybridRetriever
 from rerank import Reranker
+from 系统日志.config import get_logger
+from 异常处理.exceptions import LLMError, ConfigError
+
 load_dotenv()
 
 # 当前文件所在目录
@@ -12,57 +22,185 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 # 数据文件路径（位于 ../data/structured_segments.json）
 DATA_JSON = os.path.join(BASE_DIR, "..", "data", "structured_segments.json")
 
-llm_client = OpenAI(
-    api_key=os.getenv("qwen_api_key"),
-    base_url="https://dashscope.aliyuncs.com/compatible-mode/v1"
-)
+logger = get_logger(__name__)
+
+# LLM 上下文窗口预留：给 system prompt + 用户问题 + 答案预留的 token 数
+RESERVED_TOKENS = 2000
+# 默认模型上下文窗口（qwen-plus 为 32K）
+DEFAULT_MAX_CONTEXT_TOKENS = 32000
+
+# 默认大模型配置（可被 create_llm_client 覆盖，便于切换不同大模型）
+DEFAULT_LLM_MODEL = "qwen-plus"
+DEFAULT_LLM_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+DEFAULT_LLM_API_KEY_ENV = "qwen_api_key"
+
+
+def create_llm_client(
+    api_key: Optional[str] = None,
+    base_url: Optional[str] = None,
+    api_key_env: str = DEFAULT_LLM_API_KEY_ENV,
+) -> OpenAI:
+    """
+    创建大模型客户端（模块级函数，便于使用不同的大模型）。
+
+    参数：
+        api_key: API 密钥；若为 None，则从环境变量 api_key_env 读取
+        base_url: API 端点；若为 None，使用默认的 DashScope 兼容端点
+        api_key_env: 读取 API 密钥的环境变量名（默认 qwen_api_key）
+
+    返回：
+        配置好的 OpenAI 客户端实例
+
+    示例：
+        # 使用默认通义千问
+        client = create_llm_client()
+
+        # 使用其他大模型（如 DeepSeek、OpenAI 等）
+        client = create_llm_client(
+            api_key="sk-xxx",
+            base_url="https://api.deepseek.com/v1",
+        )
+    """
+    # 解析 API 密钥：优先使用传入的，否则从环境变量读取
+    resolved_key = api_key or os.getenv(api_key_env)
+    if not resolved_key:
+        raise ConfigError(
+            f"未设置 API 密钥（请传入 api_key 或设置环境变量 {api_key_env}）",
+            code="MISSING_API_KEY"
+        )
+
+    resolved_url = base_url or DEFAULT_LLM_BASE_URL
+    logger.info("创建 LLM 客户端，base_url=%s", resolved_url)
+    return OpenAI(
+        api_key=resolved_key,
+        base_url=resolved_url,
+    )
+
+
+def _estimate_tokens(text: str) -> int:
+    """
+    估算文本的 token 数。
+    优先使用 tiktoken（若已安装），否则退化为字符数估算（中文约 1 字符 ≈ 0.6 token）。
+    """
+    try:
+        import tiktoken
+        enc = tiktoken.get_encoding("cl100k_base")
+        return len(enc.encode(text))
+    except Exception:
+        # 中文场景：约 1.5 字符 ≈ 1 token，保守估算
+        return int(len(text) / 1.5)
+
+
 class QASystem:
     """
     完整的检索增强问答系统：
     召回 → 重排序 → 拼接上下文 → LLM 回答
     """
-    def __init__(self, hybrid_retriever: HybridRetriever, reranker: Reranker, llm_model: str = "qwen-plus"):
+    def __init__(
+        self,
+        hybrid_retriever: HybridRetriever,
+        reranker: Reranker,
+        llm_model: str = DEFAULT_LLM_MODEL,
+        max_context_tokens: int = DEFAULT_MAX_CONTEXT_TOKENS,
+        llm_client: Optional[OpenAI] = None,
+        api_key: Optional[str] = None,
+        base_url: Optional[str] = None,
+        api_key_env: str = DEFAULT_LLM_API_KEY_ENV,
+    ):
         self.hybrid = hybrid_retriever
         self.reranker = reranker
         self.llm_model = llm_model
+        self.max_context_tokens = max_context_tokens
+
+        # 创建 LLM 客户端：
+        # 1. 若显式传入 llm_client，则直接使用（最灵活，可传入任意大模型客户端）
+        # 2. 否则通过模块级 create_llm_client 创建（支持不同 api_key / base_url / 环境变量）
+        if llm_client is not None:
+            self.llm_client = llm_client
+            logger.info("使用外部传入的 LLM 客户端，模型=%s", llm_model)
+        else:
+            self.llm_client = create_llm_client(
+                api_key=api_key,
+                base_url=base_url,
+                api_key_env=api_key_env,
+            )
+
 
     def answer(
         self,
-        query: str,  #用户问题
+        query: str,  # 用户问题
         max_candidates: int = 20,
-        top_k: int = 5,  #重排序后保留的文档数
-        include_sources: bool = True  #是否在答案中包含引用来源
+        top_k: int = 5,  # 重排序后保留的文档数
+        include_sources: bool = True,  # 是否在答案中包含引用来源
+        min_rerank_score: Optional[float] = None,  # 质量阈值，低于此分数的文档不参与拼接
     ) -> Dict:
+        # ---- 输入校验 ----
+        if not query or not query.strip():
+            logger.warning("answer 收到空查询")
+            return {"answer": "请输入有效的问题。", "sources": []}
+
         # ---- 步骤1：召回 ----
-        # 变量：混合检索返回的候选文档列表
-        candidates = self.hybrid.search(query, top_k=max_candidates, method="rrf")
+        try:
+            candidates = self.hybrid.search(query, top_k=max_candidates, method="rrf")
+        except Exception as e:
+            logger.error("混合检索失败: %s", e, exc_info=True)
+            return {"answer": "检索过程中出现错误，请稍后重试。", "sources": []}
+
         if not candidates:
+            logger.info("未找到相关信息，query=%r", query[:50])
             return {"answer": "抱歉，未找到相关信息。", "sources": []}
 
         # ---- 步骤2：重排序 ----
-        # 变量：重排序后的文档列表（默认会附加 rerank_score 和 original_score）
-        reranked_docs = self.reranker.rerank(query, candidates, top_k=top_k)
+        try:
+            reranked_docs = self.reranker.rerank(
+                query, candidates, top_k=top_k, min_score=min_rerank_score
+            )
+        except Exception as e:
+            logger.error("重排序失败: %s", e, exc_info=True)
+            return {"answer": "重排序过程中出现错误，请稍后重试。", "sources": []}
 
-        # ---- 步骤3：拼接上下文 ----
+        if not reranked_docs:
+            logger.info("重排序后无有效文档（可能全部低于质量阈值）")
+            return {"answer": "抱歉，未找到足够相关的信息。", "sources": []}
+
+        # ---- 步骤3：拼接上下文（带 token 上限控制）----
         context_parts = []
-        # 变量：来源信息列表（用于返回给用户）
         sources = []
+        total_tokens = 0
+        # 预留 token：system prompt + 用户问题 + 答案
+        budget = self.max_context_tokens - RESERVED_TOKENS - _estimate_tokens(query)
+
         for i, doc in enumerate(reranked_docs):
-            # 获取标题路径，若无则用“无标题”
             title_path = doc["metadata"].get("title_path", "无标题")
-            # 格式化：编号 + 标题路径 + 内容
-            context_parts.append(f"【文档{i+1} 来源：{title_path}】\n{doc['text']}")
+            part = f"【文档{i+1} 来源：{title_path}】\n{doc['text']}"
+            part_tokens = _estimate_tokens(part)
+
+            # 若加入该文档会超出预算，则停止拼接（文档已按 rerank 分数降序，越靠后越不重要）
+            if total_tokens + part_tokens > budget:
+                logger.warning(
+                    "上下文 token 预算不足，已拼接 %d 篇文档（预算 %d tokens）",
+                    len(context_parts), budget
+                )
+                break
+
+            context_parts.append(part)
+            total_tokens += part_tokens
+
             if include_sources:
                 sources.append({
                     "title_path": title_path,
                     "text_snippet": doc["text"][:200] + "...",
                     "rerank_score": doc.get("rerank_score", 0.0)
                 })
-        # 变量：用双换行拼接所有上下文片段
+
+        if not context_parts:
+            logger.warning("上下文为空（预算过小或文档过长）")
+            return {"answer": "抱歉，检索到的内容过长，无法生成回答。", "sources": []}
+
         context = "\n\n".join(context_parts)
+        logger.info("上下文拼接完成，共 %d 篇文档，约 %d tokens", len(context_parts), total_tokens)
 
         # ---- 步骤4：LLM 生成 ----
-        # 变量：system prompt，要求模型基于上下文回答
         system_prompt = (
             "你是一个专业的年报分析助手。请根据提供的上下文信息回答用户的问题。\n"
             "要求：\n"
@@ -70,20 +208,26 @@ class QASystem:
             "2. 如果上下文不足以回答问题，请明确说明。\n"
             "3. 如果使用了上下文中的具体数据，可以注明来源。"
         )
-        # 变量：user prompt，包含上下文和用户问题
         user_prompt = f"上下文信息：\n{context}\n\n用户问题：{query}\n请回答："
 
-        # 调用大模型
-        response = llm_client.chat.completions.create(
-            model=self.llm_model,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt}
-            ],
-            temperature=0.1,  # 低温度保证回答稳定性
-        )
-        # 变量：模型生成的最终答案
-        answer_text = response.choices[0].message.content
+        try:
+            response = self.llm_client.chat.completions.create(
+                model=self.llm_model,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt}
+                ],
+                temperature=0.1,  # 低温度保证回答稳定性
+                timeout=60,       # 设置超时，避免无限等待
+            )
+            answer_text = response.choices[0].message.content
+        except Exception as e:
+            logger.error("LLM 调用失败: %s", e, exc_info=True)
+            return {
+                "answer": "抱歉，大模型生成回答时出现错误，请稍后重试。",
+                "sources": sources,
+                "error": str(e),
+            }
 
         # 构建返回结果
         result = {"answer": answer_text}
@@ -91,15 +235,15 @@ class QASystem:
             result["sources"] = sources
         return result
 
+
 # --------------------------- 主程序 ---------------------------
 if __name__ == "__main__":
-    # 导入数据加载和索引构建函数（可在之前模块中找到）
+    # 导入数据加载和索引构建函数
     from chroma import load_segments, build_chroma_index
     from bm25 import BM25Retriever
 
     # 1. 加载文档片段
     segments = load_segments(DATA_JSON)
-
 
     # 2. 构建 Chroma 向量索引
     print("正在构建 Chroma 索引...")
