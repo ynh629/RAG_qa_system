@@ -85,6 +85,11 @@ rag_system/
 ├── 异常处理/                  # 自定义异常体系
 │   └── exceptions.py          # RAGException 基类及 6 个子类
 │
+├── 评估/                      # 问答评估数据集构建
+│   ├── generate_qa_pairs.py   # Phase 1：LLM 自动生成候选 QA 对（qwen-plus + instructor）
+│   ├── review_qa_pairs.py     # Phase 2：人工审查（交互式 / CSV+Excel），产出最终数据集
+│   └── README.md              # 评估模块使用说明
+│
 ├── 测试/                      # 边界情况测试
 │   └── edge_case_test.py      # 12 项边界测试用例
 │

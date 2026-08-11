@@ -156,3 +156,14 @@
 [2026-08-11 00:40:12] [INFO] [rerank:41] 正在加载 BGE Reranker 模型: BAAI/bge-reranker-base
 [2026-08-11 00:40:19] [INFO] [rerank:43] BGE Reranker 模型加载完成
 [2026-08-11 00:40:19] [INFO] [qa_system:73] 创建 LLM 客户端，base_url=https://dashscope.aliyuncs.com/compatible-mode/v1
+[2026-08-11 01:04:35] [ERROR] [__main__:160] 块生成失败（重试 3 次后仍无结果）: ['第二节 公司基本情况', '3、 公司主要会计数据和财务指标', '3.1 近 3 年的主要会计数据和财务指标']
+[2026-08-11 01:13:11] [ERROR] [__main__:160] 块生成失败（重试 3 次后仍无结果）: ['第二节 公司基本情况', '3、 公司主要会计数据和财务指标', '3.1 近 3 年的主要会计数据和财务指标']
+[2026-08-11 01:29:49] [WARNING] [bm25:89] BM25 无关键词匹配，返回分数最高的 1 篇文档兜底
+[2026-08-11 01:29:49] [INFO] [bm25:97] BM25 检索 query='C:\\Users\\Administrator\\AppData\\Local\\Programs\\Pyth' 返回 1 条结果
+[2026-08-11 01:29:49] [INFO] [hybrid_retriever:58] 混合检索 query='C:\\Users\\Administrator\\AppData\\Local\\Programs\\Pyth' 向量召回=1 BM25召回=1
+[2026-08-11 01:29:49] [INFO] [hybrid_retriever:82] 混合检索完成，返回 2 条结果
+[2026-08-11 01:29:49] [WARNING] [rerank:106] 文档过长（11936 字符），截断到 500 字符
+[2026-08-11 01:29:49] [WARNING] [rerank:106] 文档过长（11936 字符），截断到 500 字符
+[2026-08-11 01:29:50] [INFO] [rerank:175] rerank 完成，返回 2 条结果
+[2026-08-11 01:29:50] [INFO] [qa_system:201] 上下文拼接完成，共 2 篇文档，约 10988 tokens
+[2026-08-11 01:31:17] [ERROR] [__main__:160] 块生成失败（重试 3 次后仍无结果）: ['第二节 公司基本情况', '3、 公司主要会计数据和财务指标', '3.1 近 3 年的主要会计数据和财务指标']
