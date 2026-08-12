@@ -42,7 +42,8 @@ BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DEFAULT_INPUT = os.path.join(BASE_DIR, "data", "chunks_recursive.json")
 DEFAULT_OUTPUT = os.path.join(BASE_DIR, "data", "qa_pairs_raw.json")
 
-load_dotenv()
+# .env 文件在上级 python/ 目录，显式指定路径，避免依赖当前工作目录
+load_dotenv(os.path.join(BASE_DIR, "..", ".env"))
 
 # 问题类型与难度（用于约束和校验模型输出）
 QUESTION_TYPES = ["数值提取", "事实检索", "归纳概括", "风险分析", "对比分析"]
@@ -190,7 +191,8 @@ def main():
         sys.exit(1)
     with open(args.input, "r", encoding="utf-8") as f:
         chunks = json.load(f)
-    valid_chunks = [c for c in chunks if c.get("content", "").strip()]
+    # 保留原始索引，避免空块被过滤后 source_chunk_id 与源文件错位
+    valid_chunks = [(i, c) for i, c in enumerate(chunks) if c.get("content", "").strip()]
     print(f"加载文本块 {len(chunks)} 个（有效 {len(valid_chunks)} 个）")
 
     end = args.end if args.end is not None else len(valid_chunks)
@@ -207,12 +209,12 @@ def main():
     # 3. 逐块生成
     all_pairs = []
     for i in range(start, end):
-        chunk = valid_chunks[i]
+        source_chunk_id, chunk = valid_chunks[i]
         title = " > ".join(chunk.get("title_path", [])) or "（无标题）"
         print(f"\n[{i - start + 1}/{end - start}] 生成中: {title[:50]}...")
         pairs = generate_for_chunk(client, chunk, args.per_chunk, model=args.model)
         for p in pairs:
-            p["source_chunk_id"] = i
+            p["source_chunk_id"] = source_chunk_id  # 原始文件中的块索引
             p["source_title_path"] = chunk.get("title_path", [])
             p["source_page"] = chunk.get("page")
         all_pairs.extend(pairs)

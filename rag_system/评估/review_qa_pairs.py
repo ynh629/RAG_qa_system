@@ -141,12 +141,15 @@ def export_csv(pairs: list, path: str) -> None:
 
 def import_csv(path: str, raw_path: str = DEFAULT_RAW) -> list:
     """从 CSV 导入为最终 QA 对，并从 raw 文件回填 source_title_path / source_page。"""
-    # 加载 raw 文件，按问题文本建立索引，用于回填 CSV 中丢失的元数据
+    # 加载 raw 文件，建立 id / question 两个索引，用于回填 CSV 中丢失的元数据。
+    # 优先按 id 匹配（导出时 id 为 qa_001...，对应 raw 的列表顺序），
+    # 这样即使在 Excel 中修改过 question 也能回填来源信息。
     raw_index = {}
     if os.path.exists(raw_path):
         with open(raw_path, "r", encoding="utf-8") as f:
-            for rp in json.load(f):
+            for i, rp in enumerate(json.load(f)):
                 raw_index[rp.get("question", "")] = rp
+                raw_index.setdefault(f"qa_{i + 1:03d}", rp)
 
     pairs = []
     with open(path, "r", encoding="utf-8-sig", newline="") as f:
@@ -154,7 +157,9 @@ def import_csv(path: str, raw_path: str = DEFAULT_RAW) -> list:
         for row in reader:
             if not row.get("question") or not row.get("ground_truth"):
                 continue
-            raw_meta = raw_index.get(row["question"], {})
+            raw_meta = raw_index.get((row.get("id") or "").strip(), {})
+            if not raw_meta:
+                raw_meta = raw_index.get(row["question"], {})
             pairs.append({
                 "question": row["question"],
                 "ground_truth": row["ground_truth"],

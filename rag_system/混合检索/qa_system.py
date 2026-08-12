@@ -12,6 +12,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from hybrid_retriever import HybridRetriever
 from rerank import Reranker
+from bm25 import BM25Retriever
 from 系统日志.config import get_logger
 from 异常处理.exceptions import LLMError, ConfigError
 
@@ -30,7 +31,7 @@ RESERVED_TOKENS = 2000
 DEFAULT_MAX_CONTEXT_TOKENS = 32000
 
 # 默认大模型配置（可被 create_llm_client 覆盖，便于切换不同大模型）
-DEFAULT_LLM_MODEL = "qwen-plus"
+DEFAULT_LLM_MODEL = "qwen3.7-plus"
 DEFAULT_LLM_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
 DEFAULT_LLM_API_KEY_ENV = "qwen_api_key"
 
@@ -91,26 +92,71 @@ def _estimate_tokens(text: str) -> int:
         return int(len(text) / 1.5)
 
 
+# 支持的检索模式
+VALID_MODES = ("full", "vector_only", "bm25_only", "hybrid_no_rerank", "vector_rerank")
+# 需要重排序的模式
+RERANK_MODES = ("full", "vector_rerank")
+
+
 class QASystem:
     """
     完整的检索增强问答系统：
-    召回 → 重排序 → 拼接上下文 → LLM 回答
+    召回 → 重排序（可选）→ 拼接上下文 → LLM 回答
+
+    支持多种检索模式（retrieval_mode）：
+        - "full"：混合检索（BM25+向量+RRF融合）+ BGE 重排序（完整管线）
+        - "vector_only"：仅向量检索，无重排序（基础 RAG）
+        - "bm25_only"：仅 BM25 关键词检索，无重排序
+        - "hybrid_no_rerank"：混合检索，无重排序
+        - "vector_rerank"：仅向量检索 + BGE 重排序
     """
     def __init__(
         self,
-        hybrid_retriever: HybridRetriever,
-        reranker: Reranker,
+        hybrid_retriever: Optional[HybridRetriever] = None,
+        reranker: Optional[Reranker] = None,
         llm_model: str = DEFAULT_LLM_MODEL,
         max_context_tokens: int = DEFAULT_MAX_CONTEXT_TOKENS,
         llm_client: Optional[OpenAI] = None,
         api_key: Optional[str] = None,
         base_url: Optional[str] = None,
         api_key_env: str = DEFAULT_LLM_API_KEY_ENV,
+        retrieval_mode: str = "full",    #选择模式
+        chroma_collection=None,
+        bm25_retriever: Optional[BM25Retriever] = None,
+        segments: Optional[List[Dict]] = None,
     ):
+        if retrieval_mode not in VALID_MODES:
+            raise ConfigError(
+                f"不支持的检索模式: {retrieval_mode}（可选: {', '.join(VALID_MODES)}）",
+                code="INVALID_MODE"
+            )
+
+        self.retrieval_mode = retrieval_mode
         self.hybrid = hybrid_retriever
         self.reranker = reranker
+        self.chroma_collection = chroma_collection
+        self.bm25_retriever = bm25_retriever
+        self.segments = segments
         self.llm_model = llm_model
         self.max_context_tokens = max_context_tokens
+
+        # 校验模式与组件的匹配关系
+        needs_hybrid = retrieval_mode in ("full", "hybrid_no_rerank")
+        needs_rerank = retrieval_mode in RERANK_MODES
+        needs_chroma = retrieval_mode in ("vector_only", "vector_rerank")
+        needs_bm25 = retrieval_mode == "bm25_only"
+
+        if needs_hybrid and hybrid_retriever is None:
+            raise ConfigError(f"模式 {retrieval_mode} 需要 hybrid_retriever", code="MISSING_COMPONENT")
+        if needs_rerank and reranker is None:
+            raise ConfigError(f"模式 {retrieval_mode} 需要 reranker", code="MISSING_COMPONENT")
+        if needs_chroma and chroma_collection is None:
+            raise ConfigError(f"模式 {retrieval_mode} 需要 chroma_collection", code="MISSING_COMPONENT")
+        if needs_bm25 and bm25_retriever is None:
+            raise ConfigError(f"模式 {retrieval_mode} 需要 bm25_retriever", code="MISSING_COMPONENT")
+        # bm25_only 模式需要 segments 来获取 metadata
+        if needs_bm25 and segments is None:
+            raise ConfigError(f"模式 {retrieval_mode} 需要 segments（用于获取标题路径）", code="MISSING_COMPONENT")
 
         # 创建 LLM 客户端：
         # 1. 若显式传入 llm_client，则直接使用（最灵活，可传入任意大模型客户端）
@@ -126,6 +172,77 @@ class QASystem:
             )
 
 
+    def _vector_search(self, query: str, top_k: int) -> List[Dict]:
+        """
+        仅使用向量检索（Chroma），返回标准化结果列表。
+        用于 vector_only 和 vector_rerank 模式。
+        """
+        try:
+            raw = self.chroma_collection.query(
+                query_texts=[query],
+                n_results=top_k
+            )
+        except Exception as e:
+            logger.error("Chroma 查询失败: %s", e, exc_info=True)
+            return []
+
+        results = []
+        try:
+            ids = raw.get("ids", [[]])[0]
+            distances = raw.get("distances", [[]])[0]
+            documents = raw.get("documents", [[]])[0]
+            metadatas = raw.get("metadatas", [None])[0]
+        except (IndexError, KeyError, TypeError) as e:
+            logger.error("Chroma 返回结果格式异常: %s", e, exc_info=True)
+            return []
+
+        if not ids:
+            return []
+
+        for i in range(len(ids)):
+            dist = distances[i] if i < len(distances) else 1.0
+            sim = 1.0 - dist / 2.0  # 余弦距离转相似度
+            meta = metadatas[i] if metadatas and i < len(metadatas) else {}
+            results.append({
+                "id": ids[i],
+                "score": sim,
+                "text": documents[i] if i < len(documents) else "",
+                "metadata": meta if isinstance(meta, dict) else {}
+            })
+
+        logger.info("向量检索 query=%r 返回 %d 条结果", query[:50], len(results))
+        return results
+
+    def _bm25_search(self, query: str, top_k: int) -> List[Dict]:
+        """
+        仅使用 BM25 检索，返回标准化结果列表（含 metadata）。
+        用于 bm25_only 模式。
+        """
+        raw_results = self.bm25_retriever.search(query, top_k=top_k)
+
+        results = []
+        for res in raw_results:
+            idx = res.get("doc_index", 0)
+            # 从 segments 中获取标题路径
+            if self.segments and idx < len(self.segments):
+                title_path = self.segments[idx].get("title_path", [])
+                metadata = {
+                    "title_path": " > ".join(title_path) if title_path else "无标题"
+                }
+            else:
+                metadata = {"title_path": "无标题"}
+
+            results.append({
+                "id": f"bm25_{idx}",
+                "score": res["score"],
+                "text": res["text"],
+                "metadata": metadata
+            })
+
+        logger.info("BM25 检索 query=%r 返回 %d 条结果", query[:50], len(results))
+        return results
+
+
     def answer(
         self,
         query: str,  # 用户问题
@@ -139,25 +256,35 @@ class QASystem:
             logger.warning("answer 收到空查询")
             return {"answer": "请输入有效的问题。", "sources": []}
 
-        # ---- 步骤1：召回 ----
+        # ---- 步骤1：召回（按检索模式分支）----
         try:
-            candidates = self.hybrid.search(query, top_k=max_candidates, method="rrf")
+            if self.retrieval_mode in ("full", "hybrid_no_rerank"):
+                candidates = self.hybrid.search(query, top_k=max_candidates, method="rrf")
+            elif self.retrieval_mode in ("vector_only", "vector_rerank"):
+                candidates = self._vector_search(query, top_k=max_candidates)
+            elif self.retrieval_mode == "bm25_only":
+                candidates = self._bm25_search(query, top_k=max_candidates)
         except Exception as e:
-            logger.error("混合检索失败: %s", e, exc_info=True)
+            logger.error("检索失败 [%s]: %s", self.retrieval_mode, e, exc_info=True)
             return {"answer": "检索过程中出现错误，请稍后重试。", "sources": []}
 
         if not candidates:
             logger.info("未找到相关信息，query=%r", query[:50])
             return {"answer": "抱歉，未找到相关信息。", "sources": []}
 
-        # ---- 步骤2：重排序 ----
-        try:
-            reranked_docs = self.reranker.rerank(
-                query, candidates, top_k=top_k, min_score=min_rerank_score
-            )
-        except Exception as e:
-            logger.error("重排序失败: %s", e, exc_info=True)
-            return {"answer": "重排序过程中出现错误，请稍后重试。", "sources": []}
+        # ---- 步骤2：重排序（仅 full 和 vector_rerank 模式执行）----
+        if self.retrieval_mode in RERANK_MODES:
+            try:
+                reranked_docs = self.reranker.rerank(
+                    query, candidates, top_k=top_k, min_score=min_rerank_score
+                )
+            except Exception as e:
+                logger.error("重排序失败: %s", e, exc_info=True)
+                return {"answer": "重排序过程中出现错误，请稍后重试。", "sources": []}
+        else:
+            # 无需重排序，直接取 top_k 候选
+            reranked_docs = candidates[:top_k]
+            logger.info("跳过重排序 [%s]，直接取前 %d 条候选", self.retrieval_mode, len(reranked_docs))
 
         if not reranked_docs:
             logger.info("重排序后无有效文档（可能全部低于质量阈值）")
@@ -166,6 +293,7 @@ class QASystem:
         # ---- 步骤3：拼接上下文（带 token 上限控制）----
         context_parts = []
         sources = []
+        retrieved_contexts = []  # 完整文本列表，供 RAGAS 评估使用
         total_tokens = 0
         # 预留 token：system prompt + 用户问题 + 答案
         budget = self.max_context_tokens - RESERVED_TOKENS - _estimate_tokens(query)
@@ -184,6 +312,7 @@ class QASystem:
                 break
 
             context_parts.append(part)
+            retrieved_contexts.append(doc["text"])
             total_tokens += part_tokens
 
             if include_sources:
@@ -230,7 +359,7 @@ class QASystem:
             }
 
         # 构建返回结果
-        result = {"answer": answer_text}
+        result = {"answer": answer_text, "retrieved_contexts": retrieved_contexts}
         if include_sources:
             result["sources"] = sources
         return result
