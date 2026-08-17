@@ -1,7 +1,7 @@
 # qa_system.py
 import os
 import sys
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, AsyncGenerator
 from dotenv import load_dotenv
 from openai import OpenAI
 
@@ -363,39 +363,124 @@ class QASystem:
         if include_sources:
             result["sources"] = sources
         return result
+    async def stream_answer(self, query: str, top_k: int = 5) -> AsyncGenerator[str, None]:
+      """
+    流式问答：检索 + 重排序 + 拼接上下文 + 流式 LLM 生成。
+    每次 yield 一段增量文本（通常是 token 或小片段）。
+      """
+    # ---- 输入校验 ----
+      if not query or not query.strip():
+        yield "请输入有效的问题。"
+        return
 
+    # ---- 步骤1：召回 ----
+      try:
+        if self.retrieval_mode in ("full", "hybrid_no_rerank"):
+            candidates = self.hybrid.search(query, top_k=20, method="rrf")
+        elif self.retrieval_mode in ("vector_only", "vector_rerank"):
+            candidates = self._vector_search(query, top_k=20)
+        elif self.retrieval_mode == "bm25_only":
+            candidates = self._bm25_search(query, top_k=20)
+      except Exception as e:
+        logger.error("检索失败: %s", e, exc_info=True)
+        yield "检索过程中出现错误，请稍后重试。"
+        return
 
-def run_qa_pipeline(
-    data_json: str = DATA_JSON,
-    interactive: bool = False,
-    test_questions: Optional[List[str]] = None,
-) -> QASystem:
+      if not candidates:
+        yield "抱歉，未找到相关信息。"
+        return
+
+    # ---- 步骤2：重排序 ----
+      if self.retrieval_mode in RERANK_MODES:
+        try:
+            reranked_docs = self.reranker.rerank(query, candidates, top_k=top_k)
+        except Exception as e:
+            logger.error("重排序失败: %s", e, exc_info=True)
+            yield "重排序过程中出现错误，请稍后重试。"
+            return
+      else:
+        reranked_docs = candidates[:top_k]
+
+      if not reranked_docs:
+        yield "抱歉，未找到足够相关的信息。"
+        return
+
+    # ---- 步骤3：拼接上下文（带 token 上限控制）----
+      context_parts = []
+      total_tokens = 0
+      budget = self.max_context_tokens - RESERVED_TOKENS - _estimate_tokens(query)
+
+      for i, doc in enumerate(reranked_docs):
+        title_path = doc["metadata"].get("title_path", "无标题")
+        part = f"【文档{i+1} 来源：{title_path}】\n{doc['text']}"
+        part_tokens = _estimate_tokens(part)
+
+        # 如果加入当前文档会超出预算，则停止拼接
+        if total_tokens + part_tokens > budget:
+            logger.warning(
+                "流式上下文 token 预算不足，已拼接 %d 篇文档（预算 %d tokens）",
+                len(context_parts), budget
+            )
+            break
+
+        context_parts.append(part)
+        total_tokens += part_tokens
+
+      if not context_parts:
+        logger.warning("流式上下文为空（预算过小或文档过长）")
+        yield "抱歉，检索到的内容过长，无法生成回答。"
+        return
+
+      context = "\n\n".join(context_parts)
+      logger.info("流式上下文拼接完成，共 %d 篇文档，约 %d tokens", len(context_parts), total_tokens)
+
+    # ---- 步骤4：流式调用 LLM ----
+      system_prompt = (
+        "你是一个专业的年报分析助手。请根据提供的上下文信息回答用户的问题。\n"
+        "要求：\n"
+        "1. 回答准确、简洁，基于给出的上下文。\n"
+        "2. 如果上下文不足以回答问题，请明确说明。\n"
+        "3. 如果使用了上下文中的具体数据，可以注明来源。"
+    )
+      user_prompt = f"上下文信息：\n{context}\n\n用户问题：{query}\n请回答："
+
+      try:
+        # 调用流式接口
+        stream = self.llm_client.chat.completions.create(
+            model=self.llm_model,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt}
+            ],
+            temperature=0.1,
+            stream=True,
+            timeout=60,
+        )
+        # 逐块产出增量
+        for chunk in stream:
+            if chunk.choices[0].delta.content:
+                yield chunk.choices[0].delta.content
+      except Exception as e:
+        logger.error("LLM 流式调用失败: %s", e, exc_info=True)
+        yield "抱歉，大模型生成回答时出现错误，请稍后重试。"
+
+def initialize_qa_system(data_json: str = DATA_JSON) -> QASystem:
     """
-    完整问答管线：加载数据 → 构建索引 → 创建问答系统 → 回答问题。
-
-    参数：
-        data_json: 结构化片段 JSON 路径（默认为 structured_segments.json，
-                   也可传入高级切分后的 chunks_recursive.json / chunks_semantic.json）
-        interactive: 是否进入交互式问答循环（输入 exit/quit 退出）
-        test_questions: interactive=False 时使用的问题列表（默认使用内置测试问题）
-
-    返回：
-        QASystem 实例，便于外部继续调用 answer()
+    构建并初始化 QA 系统，不执行任何问答。
+    供 API 服务或外部程序调用。
     """
-    # 导入数据加载和索引构建函数
     from chroma import load_segments, build_chroma_index
     from bm25 import BM25Retriever
 
     # 1. 加载文档片段
     segments = load_segments(data_json)
-    print(f"\n已加载 {len(segments)} 个文本片段（来源: {data_json}）")
+    logger.info("已加载 %d 个文本片段（来源: %s）", len(segments), data_json)
 
     # 2. 构建 Chroma 向量索引
-    print("正在构建 Chroma 索引...")
+    logger.info("正在构建 Chroma 索引...")
     chroma_coll = build_chroma_index(segments)
 
     # 3. 构建 BM25 索引
-    print("正在构建 BM25 索引...")
     documents = [seg["content"] for seg in segments]
     bm25_retriever = BM25Retriever(documents)
 
@@ -403,13 +488,25 @@ def run_qa_pipeline(
     hybrid = HybridRetriever(chroma_coll, bm25_retriever)
 
     # 5. 初始化重排序器
-    print("正在加载重排序模型...")
-    reranker = Reranker(backend="bge")  # 可换成 "cohere"
+    logger.info("正在加载重排序模型...")
+    reranker = Reranker(backend="bge")
 
-    # 6. 创建完整问答系统
+    # 6. 创建完整问答系统（full 模式）
     qa = QASystem(hybrid, reranker)
+    return qa
 
-    # 7. 问答环节
+def run_qa_pipeline(
+    data_json: str = DATA_JSON,
+    interactive: bool = False,
+    test_questions: Optional[List[str]] = None,
+) -> QASystem:
+    """
+    完整问答管线：构建系统 → 回答问题（测试或交互）。
+    供开发/命令行使用，不建议在 API 服务中直接调用。
+    """
+    qa = initialize_qa_system(data_json)
+
+    # 问答环节
     if interactive:
         _run_interactive_qa(qa)
     else:
