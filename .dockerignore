@@ -1,0 +1,26 @@
+# 密钥与本地配置
+.env
+.env.*
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+venv/
+.venv/
+
+# 数据与运行时产物（建议以 volume 挂载）
+*.db
+*.sqlite3
+rag_system/chroma_db/
+rag_system/logs/
+rag_system/data/qa_pairs_*.json
+rag_system/data/eval_results_*.csv
+
+# Git
+.git
+.gitignore
+
+# 其它
+.idea/
+.vscode/

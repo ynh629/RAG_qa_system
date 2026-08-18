@@ -1,0 +1,39 @@
+# ==================== RAG 核心 ====================
+# PDF 解析
+marker-pdf
+pymupdf
+pandas
+
+# 文本切分
+langchain-text-splitters
+sentence-transformers
+scikit-learn
+
+# 检索
+jieba
+rank-bm25
+chromadb
+numpy
+
+# Token 估算
+tiktoken
+
+# ==================== LLM 客户端 ====================
+openai
+python-dotenv
+instructor
+
+# ==================== Web 服务 ====================
+fastapi
+uvicorn
+sqlalchemy
+pydantic
+
+# ==================== 评估 ====================
+langchain-openai
+langchain-huggingface
+ragas
+datasets
+
+# ==================== 可选：Cohere 重排序后端 ====================
+# cohere

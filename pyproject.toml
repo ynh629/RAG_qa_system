@@ -1,0 +1,38 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "rag-workspace"
+version = "0.1.0"
+description = "年报智能问答 RAG 系统（app 应用层 + rag_system 引擎层）"
+requires-python = ">=3.10"
+dependencies = [
+    "marker-pdf",
+    "pymupdf",
+    "pandas",
+    "langchain-text-splitters",
+    "sentence-transformers",
+    "scikit-learn",
+    "jieba",
+    "rank-bm25",
+    "chromadb",
+    "numpy",
+    "tiktoken",
+    "openai",
+    "python-dotenv",
+    "instructor",
+    "fastapi",
+    "uvicorn",
+    "sqlalchemy",
+    "pydantic",
+]
+
+[project.optional-dependencies]
+dev = ["pytest"]
+eval = ["langchain-openai", "langchain-huggingface", "ragas", "datasets"]
+
+# 仅打包 app 与 rag_system 两个顶层包
+# （enterprise_tools_pkg 是独立的可安装包，避免重复打包冲突）
+[tool.setuptools.packages.find]
+include = ["app*", "rag_system*"]
