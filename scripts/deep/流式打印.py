@@ -5,9 +5,9 @@ load_dotenv()
 client=OpenAI(
     api_key=os.getenv("qwen_api_key"),
     base_url="https://dashscope.aliyuncs.com/compatible-mode/v1")
-input=input("你：")
+user_input=input("你：")
 messages=[{"role":"system","content":"你是友好的客服助手"},
-         { "role":"user","content":input}]
+         { "role":"user","content":user_input}]
 stream=client.chat.completions.create(
     model="qwen-plus",
     messages=messages,

@@ -1,0 +1,75 @@
+# ============================================================
+# 年报智能问答 RAG 系统 —— 阿里云 ECS Docker Compose 编排
+#
+# 用法：
+#   cp .env.example .env      # 填入 qwen_api_key
+#   docker compose up -d --build
+#   后端：http://<服务器IP>:8000/docs
+#   前端：http://<服务器IP>:8501
+#
+# 说明：
+#   1. rag-api（FastAPI 后端）与 rag-web（Streamlit 前端）各自独立挂载
+#      data / chroma_db / SQLite / logs 卷：两者都会初始化 ChromaDB 与 SQLite
+#      PersistentClient，共享卷会触发 "database is locked" 冲突，故隔离。
+#   2. hf_cache 卷共享模型缓存，两个服务只读复用，避免重复下载。
+#   3. 首次挂载命名卷时，Docker 会把镜像内 rag_system/data（含
+#      structured_segments.json）复制进卷；之后更新数据请 docker compose cp。
+# ============================================================
+services:
+  rag-api:
+    build: .
+    image: rag-workspace:latest
+    container_name: rag-api
+    environment:
+      - qwen_api_key=${qwen_api_key:?请在仓库根目录 .env 中设置 qwen_api_key}
+      - HF_ENDPOINT=${HF_ENDPOINT:-https://hf-mirror.com}
+      - LLM_MODEL=${LLM_MODEL:-qwen-plus}
+      - TZ=${TZ:-Asia/Shanghai}
+    volumes:
+      - rag_api_data:/workspace/rag_system/data          # 知识库数据/上传文件
+      - rag_api_chroma:/workspace/rag_system/chroma_db   # Chroma 向量库
+      - rag_api_db:/workspace/data                       # SQLite 对话历史
+      - rag_api_logs:/workspace/rag_system/logs          # 运行日志
+      - hf_cache:/root/.cache/huggingface                # BGE 模型缓存
+    ports:
+      - "8000:8000"
+    restart: unless-stopped
+    # 健康检查继承自 Dockerfile（HEALTHCHECK），start-period=300s 覆盖首启初始化
+
+  rag-web:
+    image: rag-workspace:latest
+    container_name: rag-web
+    depends_on:
+      - rag-api
+    environment:
+      - qwen_api_key=${qwen_api_key:?请在仓库根目录 .env 中设置 qwen_api_key}
+      - HF_ENDPOINT=${HF_ENDPOINT:-https://hf-mirror.com}
+      - LLM_MODEL=${LLM_MODEL:-qwen-plus}
+      - TZ=${TZ:-Asia/Shanghai}
+    volumes:
+      - rag_web_data:/workspace/rag_system/data          # 知识库数据/上传文件
+      - rag_web_chroma:/workspace/rag_system/chroma_db   # Chroma 向量库
+      - rag_web_db:/workspace/data                       # SQLite 对话历史
+      - rag_web_logs:/workspace/rag_system/logs          # 运行日志
+      - hf_cache:/root/.cache/huggingface                # BGE 模型缓存（共享复用）
+    ports:
+      - "8501:8501"
+    command:
+      - streamlit
+      - run
+      - app/streamlit_app.py
+      - --server.address=0.0.0.0
+      - --server.port=8501
+      - --server.headless=true
+    restart: unless-stopped
+
+volumes:
+  rag_api_data:
+  rag_api_chroma:
+  rag_api_db:
+  rag_api_logs:
+  rag_web_data:
+  rag_web_chroma:
+  rag_web_db:
+  rag_web_logs:
+  hf_cache:

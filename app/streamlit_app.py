@@ -245,14 +245,14 @@ if prompt := st.chat_input("请输入你的问题..."):
                     _iter_async(st.session_state.qa.stream_answer(prompt, top_k=5))
                 )
                 sources = st.session_state.qa.last_sources
-                _render_sources_and_feedback(sources, None)
+                chat_id = _save_chat(prompt, answer, st.session_state.qa.last_retrieved_contexts)
+                _render_sources_and_feedback(sources, chat_id)
             except Exception as e:
                 answer = f"抱歉，生成回答时出错：{e}"
                 st.markdown(answer)
                 sources = []
+                chat_id = None
 
-        # 保存到数据库
-        chat_id = _save_chat(prompt, answer, st.session_state.qa.last_retrieved_contexts)
         st.session_state.messages.append({
             "role": "assistant",
             "content": answer,

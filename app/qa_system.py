@@ -350,11 +350,12 @@ class QASystem:
             return {
                 "answer": "抱歉，大模型生成回答时出现错误，请稍后重试。",
                 "sources": sources,
+                "retrieved_contexts": retrieved_contexts,
                 "error": str(e),
             }
 
         # 构建返回结果
-        result = {"answer": answer_text, "retrieved_contexts": retrieved_contexts}
+        result = {"answer": answer_text, "retrieved_contexts": retrieved_contexts, "total_tokens": total_tokens}
         if include_sources:
             result["sources"] = sources
         return result

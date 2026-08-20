@@ -24,3 +24,7 @@ rag_system/data/eval_results_*.csv
 # 其它
 .idea/
 .vscode/
+
+# 运行时数据（上传文件、模型缓存，不进镜像）
+rag_system/data/uploads/
+**/.cache/

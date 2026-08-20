@@ -97,7 +97,7 @@ def text_to_sql(query: str, schema: str) -> str:
             print(f"SQL尝试 {attempt + 1}失败 failed with error: {error_msg}.")
             messages.append({"role": "assistant", "content": sql_candidate})
             messages.append({"role": "user", "content": f"生成的 SQL 语句执行失败，错误信息: {error_msg}。请根据错误信息修改 SQL 语句并重新生成。"})
-        raise Exception("SQL执行失败")
+    raise Exception("SQL执行失败")
 #---------------------测试用例--------------
 if __name__ == "__main__":
     print("=" * 50)

@@ -1,5 +1,5 @@
 # models.py
-from sqlalchemy import Column, Integer, String, Text, Float, DateTime, Boolean
+from sqlalchemy import Column, Integer, String, Text, Float, DateTime, Boolean, ForeignKey
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.sql import func
 from datetime import datetime
@@ -39,7 +39,7 @@ class UserFeedback(Base):
     # 主键
     id = Column(Integer, primary_key=True, autoincrement=True)
     # 关联对话历史表的主键（外键）
-    chat_id = Column(Integer, nullable=False)
+    chat_id = Column(Integer, ForeignKey("chat_history.id", ondelete="CASCADE"), nullable=False)
     # 用户标识
     user_id = Column(String(255), nullable=False)
     # 反馈类型：'up' 表示赞，'down' 表示踩

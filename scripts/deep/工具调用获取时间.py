@@ -22,7 +22,6 @@ tools=[{
 def get_time():
         now=datetime.datetime.now()
         return now.strftime("%Y-%m-%d %H:%M:%S")
-result=get_time()
 def ask_with_tools(user_message,model="qwen_plus",temperature=0.1):
   response=client.chat.completions.create(
     model="qwen-plus",
@@ -45,6 +44,7 @@ def ask_with_tools(user_message,model="qwen_plus",temperature=0.1):
         args = json.loads(tool_call.function.arguments)
   else:
     return msg.content
+  result = get_time()
   print(f"模型调用函数{func_name},参数{args}")
   print(f"函数执行结果{result}")
   messages = [

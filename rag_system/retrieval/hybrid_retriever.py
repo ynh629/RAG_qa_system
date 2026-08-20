@@ -1,5 +1,6 @@
 # hybrid_retriever.py
 import os
+import hashlib
 import numpy as np
 from typing import List, Dict, Optional, Tuple
 
@@ -23,7 +24,7 @@ def _make_key(text: str, doc_id: Optional[str] = None) -> str:
     """
     if doc_id:
         return f"id:{doc_id}"
-    return f"hash:{hash(text)}:{text[:50]}"
+    return f"hash:{hashlib.md5(text.encode()).hexdigest()}:{text[:50]}"
 
 
 class HybridRetriever:

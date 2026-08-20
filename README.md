@@ -85,6 +85,44 @@ streamlit run app/streamlit_app.py
 
 PDF 解析(Marker/PyMuPDF) · 文本切分(LangChain/语义) · BM25(jieba+rank_bm25) · 向量库(ChromaDB+BGE) · 重排序(BGE CrossEncoder) · LLM(通义千问 DashScope) · API(FastAPI+SQLAlchemy) · Web前端(Streamlit) · 评估(RAGAS) · 日志(logging RotatingFileHandler)
 
+## 阿里云部署（Docker Compose）
+
+在单台阿里云 ECS 上使用 Docker Compose 一键部署（FastAPI 后端 + Streamlit 前端）。
+
+```bash
+# 1. 服务器安装 Docker + Compose 插件
+# 2. 上传项目源码到服务器（.env 含密钥，不要上传，在服务器上单独创建）
+# 3. 配置环境变量
+cp .env.example .env
+#    编辑 .env，填入 qwen_api_key
+# 4. 构建并启动
+docker compose up -d --build
+# 5. 查看状态与日志
+docker compose ps
+docker compose logs -f rag-api
+```
+
+- 后端 API 文档：`http://<服务器IP>:8000/docs`
+- 前端页面：`http://<服务器IP>:8501`
+
+### 配置说明
+
+| 项 | 说明 |
+|----|------|
+| `qwen_api_key` | 必填，通义千问 DashScope 密钥（[控制台](https://dashscope.console.aliyun.com/)） |
+| `HF_ENDPOINT` | 默认 `https://hf-mirror.com`。国内 ECS 无法直连 HuggingFace，BGE 嵌入/重排模型从该镜像站下载 |
+| 数据卷 | rag-api / rag-web 各自独立挂载 data、chroma_db、SQLite、logs（避免 ChromaDB/SQLite 并发写锁冲突）；`hf_cache` 卷共享模型缓存 |
+| 首启时间 | 首次启动需下载 BGE 模型并重建索引，约 3~10 分钟，健康检查 `start-period=300s` 已覆盖 |
+
+### 阿里云 ECS 注意事项
+
+- **安全组**放行 8000 / 8501 端口（生产建议前面加 Nginx / SLB 只暴露 443，或仅内网访问）。
+- 建议 **2 核 4GB 以上**：BGE 重排模型（bge-reranker-base 约 1.1GB）+ 嵌入模型加载约需 1.5GB 内存。
+- 若需公网 HTTPS 域名：使用阿里云 SLB/ALB + SSL 证书，转发到 8000 / 8501。
+- **默认单 worker**：本应用每个 worker 都会独立加载模型并重建 Chroma 索引，多 worker 会内存翻倍并引发锁冲突。若要扩展，建议先将 Chroma 迁移为 Server 模式、SQLite 迁移为 RDS PostgreSQL（代码已支持 `DATABASE_URL` 非 SQLite 分支）。
+- 数据持久化在命名卷中，`docker compose down` 不会删除；确认清理用 `docker compose down -v`。
+- 更新知识库数据：`docker compose cp rag_system/data/structured_segments.json rag-api:/workspace/rag_system/data/` 后重启容器（启动时会自动重建索引）。
+
 ## 下一步规划（未包含在本次重构）
 
 - 流式 SSE 接口（FastAPI 侧）、鉴权与限流、多轮对话增强

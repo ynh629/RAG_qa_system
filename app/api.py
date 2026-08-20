@@ -1,3 +1,11 @@
+import os
+import sys
+
+# 确保项目根目录在 sys.path，使直接运行 python app/api.py 也能正常导入
+ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if ROOT_DIR not in sys.path:
+    sys.path.insert(0, ROOT_DIR)
+
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, Depends
