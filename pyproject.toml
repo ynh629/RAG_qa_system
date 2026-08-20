@@ -26,6 +26,7 @@ dependencies = [
     "uvicorn",
     "sqlalchemy",
     "pydantic",
+    "streamlit",
 ]
 
 [project.optional-dependencies]

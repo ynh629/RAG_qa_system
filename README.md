@@ -13,7 +13,8 @@ python/
 │   ├── qa_system.py         # QASystem 编排层（召回→重排→生成→引用）
 │   ├── models.py / database.py  # SQLAlchemy ORM 与数据库
 │   ├── config.py            # ★ 统一配置中心（路径/模型/端口，读 .env）
-│   └── cli.py               # 交互式 CLI 管线：解析 PDF → 切分 → 问答
+│   ├── cli.py               # 交互式 CLI 管线：解析 PDF → 切分 → 问答
+│   └── streamlit_app.py     # Streamlit 前端：流式聊天 + 上传 + 历史
 │
 ├── rag_system/              # 引擎层（可复用 RAG 组件库）
 │   ├── parsing/             # PDF 解析与结构化切分
@@ -60,6 +61,10 @@ python -m app.main            # 等价于 uvicorn app.api:app --reload
 
 # 4. 或使用交互式 CLI 完整管线（解析→切分→问答）
 python -m app.cli
+
+# 5. 启动 Streamlit 前端（流式聊天 + 文件上传 + 历史记录）
+streamlit run app/streamlit_app.py
+# 访问：http://localhost:8501
 ```
 
 ## 常用命令
@@ -74,13 +79,14 @@ python -m app.cli
 | 构建评估数据集 | `python -m rag_system.evaluation.generate_qa_pairs` → `review_qa_pairs` |
 | RAGAS 多模式评估 | `python -m rag_system.evaluation.run_eval --compare` |
 | 容器化部署 | `docker build -t rag-workspace . && docker run -p 8000:8000 -e qwen_api_key=xxx rag-workspace` |
+| 启动 Streamlit 前端 | `streamlit run app/streamlit_app.py`（http://localhost:8501） |
 
 ## 技术栈
 
-PDF 解析(Marker/PyMuPDF) · 文本切分(LangChain/语义) · BM25(jieba+rank_bm25) · 向量库(ChromaDB+BGE) · 重排序(BGE CrossEncoder) · LLM(通义千问 DashScope) · API(FastAPI+SQLAlchemy) · 评估(RAGAS) · 日志(logging RotatingFileHandler)
+PDF 解析(Marker/PyMuPDF) · 文本切分(LangChain/语义) · BM25(jieba+rank_bm25) · 向量库(ChromaDB+BGE) · 重排序(BGE CrossEncoder) · LLM(通义千问 DashScope) · API(FastAPI+SQLAlchemy) · Web前端(Streamlit) · 评估(RAGAS) · 日志(logging RotatingFileHandler)
 
 ## 下一步规划（未包含在本次重构）
 
-- Web 界面（Gradio/Streamlit）、流式 SSE 接口、鉴权与限流、多轮对话
+- 流式 SSE 接口（FastAPI 侧）、鉴权与限流、多轮对话增强
 - 向量库增量复用、多文档管理
 - pytest 化 + CI、Alembic 迁移、监控指标、评估闭环回灌

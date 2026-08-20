@@ -28,6 +28,7 @@ fastapi
 uvicorn
 sqlalchemy
 pydantic
+streamlit
 
 # ==================== 评估 ====================
 langchain-openai

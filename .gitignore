@@ -5,3 +5,9 @@ __pycache__/
 *.db
 *.log
 scripts/*_out.txt
+
+rag_system/chroma_db/
+rag_system/data/uploads/
+rag_system/data/output.md
+rag_system/data/output.txt
+rag_system/data/output_tables.json
