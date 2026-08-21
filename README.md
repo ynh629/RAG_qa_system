@@ -5,7 +5,7 @@
 ## 目录结构
 
 ```
-python/
+RAG_qa_system/
 ├── app/                     # ★ 应用/产品层（面向用户的集成入口）
 │   ├── main.py              # 统一启动入口：python -m app.main
 │   ├── api.py               # FastAPI 服务（/health /chat /feedback）
