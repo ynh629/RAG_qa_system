@@ -1,13 +1,41 @@
+# 密钥与本地配置
 .env
+.env.*
+!.env.example
+
+# Python
 __pycache__/
-*.pyc
-*.egg-info
+*.py[cod]
+*.egg-info/
+venv/
+.venv/
+
+# 数据库与运行时产物
 *.db
+*.sqlite3
 *.log
 scripts/*_out.txt
 
+# Chroma 向量库（运行时生成，不入库）
 rag_system/chroma_db/
+
+# 上传文件与解析输出
 rag_system/data/uploads/
 rag_system/data/output.md
 rag_system/data/output.txt
 rag_system/data/output_tables.json
+
+# 评估中间产物（保留 eval_dataset.json 和 qa_pairs_final.json 供复现）
+rag_system/data/eval_results*.csv
+rag_system/data/qa_pairs_raw.json
+rag_system/data/qa_pairs_review.csv
+rag_system/data/chunks_recursive.json
+rag_system/data/chunks_semantic.json
+
+# IDE
+.idea/
+.vscode/
+
+# OS
+.DS_Store
+Thumbs.db
