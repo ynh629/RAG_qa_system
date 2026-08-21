@@ -1,4 +1,4 @@
-# AI 工作区 — 年报智能问答 RAG 系统
+# AI 工作区 —  RAG 数据库智能问答系统
 
 基于检索增强生成（RAG）的年报智能问答系统，含完整评估闭环与 Web API 服务。
 
@@ -123,7 +123,7 @@ docker compose logs -f rag-api
 - 数据持久化在命名卷中，`docker compose down` 不会删除；确认清理用 `docker compose down -v`。
 - 更新知识库数据：`docker compose cp rag_system/data/structured_segments.json rag-api:/workspace/rag_system/data/` 后重启容器（启动时会自动重建索引）。
 
-## 下一步规划（未包含在本次重构）
+## 下一步规划
 
 - 流式 SSE 接口（FastAPI 侧）、鉴权与限流、多轮对话增强
 - 向量库增量复用、多文档管理
