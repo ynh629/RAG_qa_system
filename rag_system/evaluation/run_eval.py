@@ -27,6 +27,13 @@ import json
 import time
 import argparse
 
+import sys
+
+# 确保仓库根目录在 sys.path，支持直接运行（python rag_system/evaluation/run_eval.py）与任意工作目录
+ROOT_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+if ROOT_DIR not in sys.path:
+    sys.path.insert(0, ROOT_DIR)
+
 from rag_system.common.logging_config import get_logger
 from rag_system.evaluation.ragas_config import get_eval_llm, get_eval_embeddings
 

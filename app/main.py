@@ -7,6 +7,13 @@
 """
 import uvicorn
 
+import sys
+
+# 确保仓库根目录在 sys.path，支持直接运行（python app/main.py）与任意工作目录
+ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if ROOT_DIR not in sys.path:
+    sys.path.insert(0, ROOT_DIR)
+
 from app.config import settings
 
 if __name__ == "__main__":

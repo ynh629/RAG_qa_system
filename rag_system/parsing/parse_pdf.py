@@ -3,6 +3,13 @@ import re
 from marker.converters.pdf import PdfConverter
 from marker.models import create_model_dict
 
+import sys
+
+# 确保仓库根目录在 sys.path，支持直接运行（python rag_system/parsing/parse_pdf.py）与任意工作目录
+ROOT_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+if ROOT_DIR not in sys.path:
+    sys.path.insert(0, ROOT_DIR)
+
 from rag_system.parsing.markdown_splitter import MarkdownHeadingSplitter
 from rag_system.common.logging_config import get_logger
 from rag_system.common.exceptions import DocumentError

@@ -4,6 +4,13 @@ import hashlib
 import numpy as np
 from typing import List, Dict, Optional, Tuple
 
+import sys
+
+# 确保仓库根目录在 sys.path，支持直接运行（python rag_system/retrieval/hybrid_retriever.py）与任意工作目录
+ROOT_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+if ROOT_DIR not in sys.path:
+    sys.path.insert(0, ROOT_DIR)
+
 from rag_system.retrieval.chroma import load_segments, build_chroma_index, search_similar
 from rag_system.retrieval.bm25 import BM25Retriever
 from rag_system.common.logging_config import get_logger

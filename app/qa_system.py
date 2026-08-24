@@ -244,7 +244,7 @@ class QASystem:
         max_candidates: int = 20,
         top_k: int = 5,  # 重排序后保留的文档数
         include_sources: bool = True,  # 是否在答案中包含引用来源
-        min_rerank_score: Optional[float] = None,  # 质量阈值，低于此分数的文档不参与拼接
+        min_rerank_score: Optional[float] = 0.5,  # 质量阈值，低于此分数的文档不参与拼接
     ) -> Dict:
         # ---- 输入校验 ----
         if not query or not query.strip():
