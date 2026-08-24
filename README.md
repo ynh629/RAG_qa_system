@@ -27,20 +27,23 @@ RAG_qa_system/
 │   ├── chroma_db/           # Chroma 向量库持久化
 │   └── logs/                # 运行日志
 │
+├── docs/                    # 文档与图表
+│   └── eval_compare.png     # RAGAS 多模式评估对比图
+│
 ├── scripts/                 # 开发辅助脚本
 │   ├── smoke_test.py        # 包导入冒烟检查
 │   ├── verify_runtime.py    # 数据 + BM25 + 数据库功能验证
-│   ├── run_tests.py         # 运行边界测试
-│   ├── extract_person_info.py
-│   ├── fast.py              # FastAPI 基础示例
-│   └── deep/                # DeepSeek 学习示例
+│   └── run_tests.py         # 运行边界测试
 │
-├── enterprise_tools_pkg/    # 独立企业工具包（摘要/情感/润色/Text-to-SQL）
-├── 客服机器人/               # 独立客服机器人示例（多轮对话 + token 裁剪）
+├── data/                    # SQLite 数据库（对话历史 / 反馈）
+├── .streamlit/              # Streamlit 主题配置
 │
 ├── requirements.txt         # 统一依赖清单
 ├── pyproject.toml           # 项目元数据与打包配置（pip install -e .）
+├── docker-compose.yml       # 阿里云 ECS 一键部署编排
 ├── Dockerfile / .dockerignore
+├── .env.example             # 环境变量示例
+├── LICENSE
 └── .env                     # 密钥与配置（qwen_api_key 等，不入库）
 ```
 
@@ -84,6 +87,32 @@ streamlit run app/streamlit_app.py
 ## 技术栈
 
 PDF 解析(Marker/PyMuPDF) · 文本切分(LangChain/语义) · BM25(jieba+rank_bm25) · 向量库(ChromaDB+BGE) · 重排序(BGE CrossEncoder) · LLM(通义千问 DashScope) · API(FastAPI+SQLAlchemy) · Web前端(Streamlit) · 评估(RAGAS) · 日志(logging RotatingFileHandler)
+
+## RAGAS 评估对比
+
+使用 [RAGAS](https://github.com/explodinggradients/ragas) 对 5 种检索模式进行了逐题评估与多模式对比（数据来源：`rag_system/data/eval_results_*.csv`）。
+
+**5 个评估指标**：忠实度（防幻觉）、答案相关性（切题）、上下文精确率（排序质量）、上下文召回率（召回完整性）、答案正确性（事实一致性）。
+
+![RAGAS 多模式检索评估对比](docs/eval_compare.png)
+
+### 各模式指标均值
+
+| 检索模式 | 忠实度 | 答案相关性 | 上下文精确率 | 上下文召回率 | 答案正确性 |
+|----------|--------|-----------|-------------|-------------|-----------|
+| full（混合检索+重排序） | 0.5909 | **0.8804** | 0.5593 | 0.8333 | 0.6367 |
+| vector_rerank（向量+重排序） | 0.5909 | 0.8722 | 0.6042 | 0.8333 | 0.6000 |
+| hybrid_no_rerank（混合检索，无重排） | 0.6528 | 0.8471 | 0.5681 | 0.8333 | 0.7067 |
+| vector_only（仅向量） | 0.6319 | 0.8306 | 0.6111 | 0.8333 | **0.7582** |
+| bm25_only（仅 BM25） | **0.7986** | 0.8613 | **0.6264** | 0.8333 | 0.6999 |
+
+### 结论与建议
+
+- **答案相关性**：完整管线 `full` 最高（0.88），混合检索 + 重排序对"答得准、答得贴合问题"最有利；
+- **忠实度 / 上下文精确率**：`bm25_only` 最高，年报中的数值、术语类问答对关键词精确匹配更敏感，BM25 能更精准地锁定来源片段；
+- **答案正确性**：`vector_only` 最高（0.76），与语义召回上下文更完整有关；
+- **上下文召回率**：5 种模式均为 0.83，说明召回源一致，模式间的差异主要来自排序与筛选策略；
+- **建议**：综合体验选 `full`（答案相关性第一、整体均衡）；对纯数值/术语类问答场景，可提高 BM25 权重或将 BM25 作为兜底通道；实际使用中可用本对比图数据按需切换 `retrieval_mode`。
 
 ## 阿里云部署（Docker Compose）
 
