@@ -4,7 +4,7 @@
 # 构建：docker build -t rag-workspace .
 # 运行（单容器，等价于 docker compose 中 rag-api 服务）：
 #   docker run -p 8000:8000 \
-#     -e qwen_api_key=你的密钥 \
+#     -e deepseek_api_key=你的密钥 \
 #     -e HF_ENDPOINT=https://hf-mirror.com \
 #     -v rag_data:/workspace/rag_system/data \
 #     -v rag_chroma:/workspace/rag_system/chroma_db \
@@ -57,7 +57,7 @@ EXPOSE 8000 8501
 HEALTHCHECK --interval=30s --timeout=5s --start-period=300s --retries=3 \
     CMD curl -fsS http://127.0.0.1:8000/health || exit 1
 
-# 注意：API 密钥通过运行时环境变量注入（qwen_api_key），不要打进镜像。
+# 注意：API 密钥通过运行时环境变量注入（deepseek_api_key），不要打进镜像。
 # 说明：默认单 worker —— 本应用每个 worker 都会独立初始化 RAG（加载 BGE 模型、
 #       重建 Chroma 索引），多 worker 会带来内存翻倍并引发 ChromaDB/SQLite
 #       并发写锁冲突；如需横向扩展，建议先把 Chroma 迁移为 Server 模式、

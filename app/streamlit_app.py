@@ -215,7 +215,7 @@ if st.session_state.qa is None:
                 st.session_state.current_doc = "默认（年报.pdf）"
             except Exception as e:
                 st.error(f"知识库初始化失败：{e}")
-                st.info("请在 .env 配置 qwen_api_key，或上传文档后重试。")
+                st.info("请在 .env 配置 deepseek_api_key，或上传文档后重试。")
     else:
         st.info("未找到默认知识库，请在左侧上传文档开始。")
 

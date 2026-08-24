@@ -1,7 +1,7 @@
 # ragas_config.py
 """
 RAGAS 评估配置模块。
-封装 RAGAS 所需的 LLM 和 Embedding 对象，复用配置中心的通义千问和 BGE 模型。
+封装 RAGAS 所需的 LLM 和 Embedding 对象，复用配置中心的 DeepSeek 和 BGE 模型。
 """
 import os
 
@@ -31,7 +31,7 @@ def get_eval_llm(
 ) -> LangchainLLMWrapper:
     """
     创建 RAGAS 评估用的 LLM 封装。
-    复用通义千问 DashScope OpenAI 兼容端点，temperature=0 保证评估稳定性。
+    复用 DeepSeek OpenAI 兼容端点，temperature=0 保证评估稳定性。
 
     返回：
         LangchainLLMWrapper 实例

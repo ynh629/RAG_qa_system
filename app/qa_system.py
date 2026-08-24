@@ -18,7 +18,7 @@ DATA_JSON = settings.DATA_JSON
 
 # LLM 上下文窗口预留：给 system prompt + 用户问题 + 答案预留的 token 数
 RESERVED_TOKENS = settings.RESERVED_TOKENS
-# 默认模型上下文窗口（qwen-plus 为 32K）
+# 默认模型上下文窗口（deepseek-chat 为 64K）
 DEFAULT_MAX_CONTEXT_TOKENS = settings.MAX_CONTEXT_TOKENS
 
 # 默认大模型配置（可被 create_llm_client 覆盖，便于切换不同大模型）
@@ -37,14 +37,14 @@ def create_llm_client(
 
     参数：
         api_key: API 密钥；若为 None，则从环境变量 api_key_env 读取
-        base_url: API 端点；若为 None，使用默认的 DashScope 兼容端点
-        api_key_env: 读取 API 密钥的环境变量名（默认 qwen_api_key）
+        base_url: API 端点；若为 None，使用默认的 DeepSeek 端点
+        api_key_env: 读取 API 密钥的环境变量名（默认 deepseek_api_key）
 
     返回：
         配置好的 OpenAI 客户端实例
 
     示例：
-        # 使用默认通义千问
+        # 使用默认 DeepSeek
         client = create_llm_client()
 
         # 使用其他大模型（如 DeepSeek、OpenAI 等）

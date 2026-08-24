@@ -44,15 +44,15 @@ class Settings:
     )
 
     # ===================== LLM =====================
-    LLM_MODEL: str = os.getenv("LLM_MODEL", "qwen-plus")
+    LLM_MODEL: str = os.getenv("LLM_MODEL", "deepseek-chat")
     LLM_BASE_URL: str = os.getenv(
-        "LLM_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1"
+        "LLM_BASE_URL", "https://api.deepseek.com/v1"
     )
-    LLM_API_KEY_ENV: str = os.getenv("LLM_API_KEY_ENV", "qwen_api_key")
+    LLM_API_KEY_ENV: str = os.getenv("LLM_API_KEY_ENV", "deepseek_api_key")
     # 上下文预算：给 system prompt + 问题 + 答案预留的 token 数
     RESERVED_TOKENS: int = int(os.getenv("RESERVED_TOKENS", "2000"))
-    # 模型上下文窗口（qwen-plus 为 32K）
-    MAX_CONTEXT_TOKENS: int = int(os.getenv("MAX_CONTEXT_TOKENS", "32000"))
+    # 模型上下文窗口（deepseek-chat 为 64K）
+    MAX_CONTEXT_TOKENS: int = int(os.getenv("MAX_CONTEXT_TOKENS", "64000"))
 
     # ===================== 检索 / 重排序 =====================
     EMBEDDING_MODEL: str = os.getenv("EMBEDDING_MODEL", "BAAI/bge-small-zh-v1.5")

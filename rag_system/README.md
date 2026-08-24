@@ -49,7 +49,7 @@
                                 └────────────┬────────────┘
                                              ▼
                                 ┌─────────────────────────┐
-                                │  LLM 生成回答 (通义千问)   │
+                                │  LLM 生成回答 (DeepSeek)   │
                                 └────────────┬────────────┘
                                              ▼
                                      答案 + 引用来源
@@ -79,7 +79,7 @@ rag_system/
 │   └── exceptions.py           # RAGException 基类及 6 个子类
 │
 ├── evaluation/                 # 问答评估
-│   ├── generate_qa_pairs.py    # Phase 1：LLM 自动生成候选 QA 对（qwen + instructor）
+│   ├── generate_qa_pairs.py    # Phase 1：LLM 自动生成候选 QA 对（deepseek + instructor）
 │   ├── review_qa_pairs.py      # Phase 2：人工审查（交互式 / CSV+Excel）
 │   ├── run_eval.py             # RAGAS 5 指标多模式评估与对比
 │   ├── ragas_config.py         # RAGAS 的 LLM / Embedding 封装（复用配置中心）
@@ -128,7 +128,7 @@ rag_system/
 1. 混合检索召回候选集（默认 RRF 融合，top_k=20）
 2. BGE 重排序精选 top_k=5
 3. **Token 预算控制**：按 rerank 分数降序逐篇拼接，超预算即停止
-4. 调用通义千问（默认 `qwen-plus`，DashScope 兼容接口）生成回答，temperature=0.1
+4. 调用 DeepSeek（默认 `deepseek-chat`，OpenAI 兼容接口）生成回答，temperature=0.1
 5. 返回答案 + 引用来源（标题路径、内容片段、rerank 分数）
 6. 支持 5 种检索模式：`full` / `vector_only` / `bm25_only` / `hybrid_no_rerank` / `vector_rerank`
 
@@ -164,10 +164,10 @@ pip install -r requirements.txt
 在仓库根目录创建 `.env`（由 `app/config.py` 统一加载）：
 
 ```env
-qwen_api_key=your_dashscope_api_key
+deepseek_api_key=your_deepseek_api_key
 # 可选覆盖项：
-# LLM_MODEL=qwen-plus
-# LLM_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
+# LLM_MODEL=deepseek-chat
+# LLM_BASE_URL=https://api.deepseek.com/v1
 # LOG_LEVEL=INFO
 # API_PORT=8000
 ```
@@ -218,7 +218,7 @@ python scripts/run_tests.py         # 运行边界测试（结果写入 UTF-8 �
 | 向量数据库 | ChromaDB |
 | 嵌入模型 | BAAI/bge-small-zh-v1.5 |
 | 重排序模型 | BAAI/bge-reranker-base (CrossEncoder) |
-| 大模型 | 通义千问（DashScope OpenAI 兼容接口） |
+| 大模型 | DeepSeek（OpenAI 兼容接口） |
 | Token 计算 | tiktoken |
 | 日志 | logging + RotatingFileHandler |
 | 评估 | RAGAS（faithfulness / relevancy / precision / recall / correctness） |

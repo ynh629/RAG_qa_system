@@ -4,7 +4,7 @@ Phase 1：使用大模型自动生成 QA 对（评估数据集候选）。
 
 流程：
     读取文本切分结果（chunks_recursive.json 或 structured_segments.json），
-    逐块调用 qwen-plus（instructor 结构化输出），每块生成 N 条问答对，
+    逐块调用 deepseek-chat（instructor 结构化输出），每块生成 N 条问答对，
     结果保存为 data/qa_pairs_raw.json 供人工审查（Phase 2）。
 
 用法：
@@ -49,9 +49,9 @@ QUESTION_TYPES = ["数值提取", "事实检索", "归纳概括", "风险分析"
 DIFFICULTIES = ["easy", "medium", "hard"]
 
 # 默认大模型配置
-DEFAULT_MODEL = "qwen-plus"
-DEFAULT_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
-DEFAULT_API_KEY_ENV = "qwen_api_key"
+DEFAULT_MODEL = "deepseek-chat"
+DEFAULT_BASE_URL = "https://api.deepseek.com/v1"
+DEFAULT_API_KEY_ENV = "deepseek_api_key"
 
 
 class QAPair(BaseModel):
