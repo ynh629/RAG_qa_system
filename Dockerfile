@@ -26,7 +26,7 @@ ENV PYTHONUNBUFFERED=1 \
     LC_ALL=C.UTF-8
 
 # curl 用于 /health 健康检查；tzdata 用于时区
-RUN apt-get update && apt-get install -y --no-install-recommends \
+RUN sed -i 's|deb.debian.org|mirrors.aliyun.com|g' /etc/apt/sources.list.d/debian.sources && apt-get update && apt-get install -y --no-install-recommends \
         tzdata \
         curl \
     && rm -rf /var/lib/apt/lists/* \
@@ -41,7 +41,7 @@ ENV HF_ENDPOINT=${HF_ENDPOINT}
 
 # 1. 先复制依赖清单并安装（利用 Docker 层缓存）
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt -i https://mirrors.cloud.aliyuncs.com/pypi/simple/ --trusted-host mirrors.cloud.aliyuncs.com
 
 # 2. 复制源码
 COPY app/ app/
