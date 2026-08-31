@@ -7,6 +7,7 @@ if ROOT_DIR not in sys.path:
     sys.path.insert(0, ROOT_DIR)
 
 from contextlib import asynccontextmanager
+from typing import Dict, List
 
 from fastapi import FastAPI, HTTPException, Depends
 from fastapi.responses import JSONResponse
@@ -65,6 +66,23 @@ async def http_exception_handler(request, exc):
 
 
 # ---------- 路由 ----------
+def _load_history(db: Session, session_id: str, max_turns: int = 5) -> List[Dict]:
+    """按 session_id 从 ChatHistory 加载最近几轮问答，构造多轮上下文消息。"""
+    rows = (
+        db.query(ChatHistory)
+        .filter(ChatHistory.session_id == session_id)
+        .order_by(ChatHistory.id.desc())
+        .limit(max_turns)
+        .all()
+    )
+    rows.reverse()  # 时间正序
+    messages = []
+    for r in rows:
+        messages.append({"role": "user", "content": r.query})
+        messages.append({"role": "assistant", "content": r.answer})
+    return messages
+
+
 @app.get("/health", tags=["系统"])
 async def health_check():
     if qa_system_instance is None:
@@ -79,11 +97,14 @@ async def chat_endpoint(request: ChatRequest, db: Session = Depends(get_db)):
         raise HTTPException(status_code=503, detail="系统尚未初始化完成，请稍后重试")
 
     try:
+        # 多轮上下文：按 session_id 取最近 5 轮历史（无 session_id 时为空 → 单轮行为不变）
+        history = _load_history(db, request.session_id) if request.session_id else []
         # 调用 RAG 系统
         result = qa_system_instance.answer(
             query=request.query,
             top_k=request.top_k,
             include_sources=request.include_sources,
+            history=history,
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"问答过程中发生错误：{str(e)}")

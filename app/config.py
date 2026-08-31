@@ -59,6 +59,12 @@ class Settings:
     RERANKER_MODEL: str = os.getenv("RERANKER_MODEL", "BAAI/bge-reranker-base")
     RERANK_BACKEND: str = os.getenv("RERANK_BACKEND", "bge")
 
+    # ===================== 多轮对话记忆 =====================
+    # 历史轮数上限（1 轮 = 一问一答），超出只保留最近的
+    MAX_HISTORY_TURNS: int = int(os.getenv("MAX_HISTORY_TURNS", "5"))
+    # 历史注入 LLM 的 token 预算，超出时从最旧开始丢弃
+    HISTORY_TOKEN_BUDGET: int = int(os.getenv("HISTORY_TOKEN_BUDGET", "1500"))
+
     # ===================== API 服务 =====================
     API_HOST: str = os.getenv("API_HOST", "0.0.0.0")
     API_PORT: int = int(os.getenv("API_PORT", "8000"))

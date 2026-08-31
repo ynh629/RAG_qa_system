@@ -10,6 +10,12 @@ from rag_system.common.logging_config import get_logger
 from rag_system.common.exceptions import LLMError, ConfigError
 
 from app.config import settings
+from app.conversation import (
+    estimate_tokens as _estimate_tokens,
+    history_tokens,
+    rewrite_query,
+    trim_history,
+)
 
 logger = get_logger(__name__)
 
@@ -69,20 +75,6 @@ def create_llm_client(
     )
 
 
-def _estimate_tokens(text: str) -> int:
-    """
-    估算文本的 token 数。
-    优先使用 tiktoken（若已安装），否则退化为字符数估算（中文约 1 字符 ≈ 0.6 token）。
-    """
-    try:
-        import tiktoken
-        enc = tiktoken.get_encoding("cl100k_base")
-        return len(enc.encode(text))
-    except Exception:
-        # 中文场景：约 1.5 字符 ≈ 1 token，保守估算
-        return int(len(text) / 1.5)
-
-
 # 支持的检索模式
 VALID_MODES = ("full", "vector_only", "bm25_only", "hybrid_no_rerank", "vector_rerank")
 # 需要重排序的模式
@@ -130,9 +122,10 @@ class QASystem:
         self.segments = segments
         self.llm_model = llm_model
         self.max_context_tokens = max_context_tokens
-        # 最近一次流式问答的引用来源与上下文（供前端展示）
+        # 最近一次流式问答的引用来源、上下文与查询改写结果（供前端展示/调试）
         self.last_sources = []
         self.last_retrieved_contexts = []
+        self.last_rewritten_query = ""
 
 
         # 校验模式与组件的匹配关系
@@ -245,20 +238,25 @@ class QASystem:
         top_k: int = 5,  # 重排序后保留的文档数
         include_sources: bool = True,  # 是否在答案中包含引用来源
         min_rerank_score: Optional[float] = 0.5,  # 质量阈值，低于此分数的文档不参与拼接
+        history: Optional[List[Dict]] = None,  # 多轮对话历史（OpenAI messages 格式）
     ) -> Dict:
         # ---- 输入校验 ----
         if not query or not query.strip():
             logger.warning("answer 收到空查询")
             return {"answer": "请输入有效的问题。", "sources": []}
 
-        # ---- 步骤1：召回（按检索模式分支）----
+        # ---- 步骤0：多轮记忆（裁剪历史 + 查询改写，改写结果仅用于检索）----
+        history_msgs = trim_history(history) if history else []
+        search_query = rewrite_query(self.llm_client, self.llm_model, query, history_msgs)
+
+        # ---- 步骤1：召回（按检索模式分支，使用改写后的查询）----
         try:
             if self.retrieval_mode in ("full", "hybrid_no_rerank"):
-                candidates = self.hybrid.search(query, top_k=max_candidates, method="rrf")
+                candidates = self.hybrid.search(search_query, top_k=max_candidates, method="rrf")
             elif self.retrieval_mode in ("vector_only", "vector_rerank"):
-                candidates = self._vector_search(query, top_k=max_candidates)
+                candidates = self._vector_search(search_query, top_k=max_candidates)
             elif self.retrieval_mode == "bm25_only":
-                candidates = self._bm25_search(query, top_k=max_candidates)
+                candidates = self._bm25_search(search_query, top_k=max_candidates)
         except Exception as e:
             logger.error("检索失败 [%s]: %s", self.retrieval_mode, e, exc_info=True)
             return {"answer": "检索过程中出现错误，请稍后重试。", "sources": []}
@@ -271,7 +269,7 @@ class QASystem:
         if self.retrieval_mode in RERANK_MODES:
             try:
                 reranked_docs = self.reranker.rerank(
-                    query, candidates, top_k=top_k, min_score=min_rerank_score
+                    search_query, candidates, top_k=top_k, min_score=min_rerank_score
                 )
             except Exception as e:
                 logger.error("重排序失败: %s", e, exc_info=True)
@@ -290,8 +288,8 @@ class QASystem:
         sources = []
         retrieved_contexts = []  # 完整文本列表，供 RAGAS 评估使用
         total_tokens = 0
-        # 预留 token：system prompt + 用户问题 + 答案
-        budget = self.max_context_tokens - RESERVED_TOKENS - _estimate_tokens(query)
+        # 预留 token：system prompt + 用户问题 + 答案 + 注入的对话历史
+        budget = self.max_context_tokens - RESERVED_TOKENS - _estimate_tokens(query) - history_tokens(history_msgs)
 
         for i, doc in enumerate(reranked_docs):
             title_path = doc["metadata"].get("title_path", "无标题")
@@ -324,14 +322,17 @@ class QASystem:
         context = "\n\n".join(context_parts)
         logger.info("上下文拼接完成，共 %d 篇文档，约 %d tokens", len(context_parts), total_tokens)
 
-        # ---- 步骤4：LLM 生成 ----
+        # ---- 步骤4：LLM 生成（注入对话历史）----
         system_prompt = (
             "你是一个专业的年报分析助手。请根据提供的上下文信息回答用户的问题。\n"
             "要求：\n"
             "1. 回答准确、简洁，基于给出的上下文。\n"
             "2. 如果上下文不足以回答问题，请明确说明。\n"
-            "3. 如果使用了上下文中的具体数据，可以注明来源。"
+            "3. 如果使用了上下文中的具体数据，可以注明来源。\n"
+            "4. 这是多轮对话：若问题中出现指代或省略（如「该公司」「上面提到的」），"
+            "请结合历史对话理解。"
         )
+        # 生成仍使用原始问题：历史消息已注入，模型可自行消解指代
         user_prompt = f"上下文信息：\n{context}\n\n用户问题：{query}\n请回答："
 
         try:
@@ -339,6 +340,7 @@ class QASystem:
                 model=self.llm_model,
                 messages=[
                     {"role": "system", "content": system_prompt},
+                    *history_msgs,
                     {"role": "user", "content": user_prompt}
                 ],
                 temperature=0.1,  # 低温度保证回答稳定性
@@ -355,14 +357,28 @@ class QASystem:
             }
 
         # 构建返回结果
-        result = {"answer": answer_text, "retrieved_contexts": retrieved_contexts, "total_tokens": total_tokens}
+        result = {
+            "answer": answer_text,
+            "retrieved_contexts": retrieved_contexts,
+            "total_tokens": total_tokens,
+            "rewritten_query": search_query,
+        }
         if include_sources:
             result["sources"] = sources
         return result
-    async def stream_answer(self, query: str, top_k: int = 5, include_sources: bool = True) -> AsyncGenerator[str, None]:
+    async def stream_answer(
+        self,
+        query: str,
+        top_k: int = 5,
+        include_sources: bool = True,
+        history: Optional[List[Dict]] = None,  # 多轮对话历史（OpenAI messages 格式）
+    ) -> AsyncGenerator[str, None]:
         """
-        流式问答：检索 + 重排序 + 拼接上下文 + 流式 LLM 生成。
+        流式问答：多轮记忆（裁剪 + 查询改写）+ 检索 + 重排序 + 拼接上下文 + 流式 LLM 生成。
         每次 yield 一段增量文本（通常是 token 或小片段）。
+
+        history 传入最近几轮 user/assistant 消息：检索用改写后的完整问题，
+        生成时历史作为 messages 注入 LLM。
 
         流式结束后，本次检索的引用来源与上下文保存在
         self.last_sources / self.last_retrieved_contexts（供前端展示引用）。
@@ -372,14 +388,19 @@ class QASystem:
             yield "请输入有效的问题。"
             return
 
-        # ---- 步骤1：召回 ----
+        # ---- 步骤0：多轮记忆（裁剪历史 + 查询改写，改写结果仅用于检索）----
+        history_msgs = trim_history(history) if history else []
+        search_query = rewrite_query(self.llm_client, self.llm_model, query, history_msgs)
+        self.last_rewritten_query = search_query
+
+        # ---- 步骤1：召回（使用改写后的查询）----
         try:
             if self.retrieval_mode in ("full", "hybrid_no_rerank"):
-                candidates = self.hybrid.search(query, top_k=20, method="rrf")
+                candidates = self.hybrid.search(search_query, top_k=20, method="rrf")
             elif self.retrieval_mode in ("vector_only", "vector_rerank"):
-                candidates = self._vector_search(query, top_k=20)
+                candidates = self._vector_search(search_query, top_k=20)
             elif self.retrieval_mode == "bm25_only":
-                candidates = self._bm25_search(query, top_k=20)
+                candidates = self._bm25_search(search_query, top_k=20)
         except Exception as e:
             logger.error("检索失败: %s", e, exc_info=True)
             yield "检索过程中出现错误，请稍后重试。"
@@ -392,7 +413,7 @@ class QASystem:
         # ---- 步骤2：重排序 ----
         if self.retrieval_mode in RERANK_MODES:
             try:
-                reranked_docs = self.reranker.rerank(query, candidates, top_k=top_k)
+                reranked_docs = self.reranker.rerank(search_query, candidates, top_k=top_k)
             except Exception as e:
                 logger.error("重排序失败: %s", e, exc_info=True)
                 yield "重排序过程中出现错误，请稍后重试。"
@@ -409,7 +430,8 @@ class QASystem:
         sources = []
         retrieved_contexts = []
         total_tokens = 0
-        budget = self.max_context_tokens - RESERVED_TOKENS - _estimate_tokens(query)
+        # 预留 token：system prompt + 用户问题 + 答案 + 注入的对话历史
+        budget = self.max_context_tokens - RESERVED_TOKENS - _estimate_tokens(query) - history_tokens(history_msgs)
 
         for i, doc in enumerate(reranked_docs):
             title_path = doc["metadata"].get("title_path", "无标题")
@@ -447,14 +469,17 @@ class QASystem:
         context = "\n\n".join(context_parts)
         logger.info("流式上下文拼接完成，共 %d 篇文档，约 %d tokens", len(context_parts), total_tokens)
 
-        # ---- 步骤4：流式调用 LLM ----
+        # ---- 步骤4：流式调用 LLM（注入对话历史）----
         system_prompt = (
             "你是一个专业的年报分析助手。请根据提供的上下文信息回答用户的问题。\n"
             "要求：\n"
             "1. 回答准确、简洁，基于给出的上下文。\n"
             "2. 如果上下文不足以回答问题，请明确说明。\n"
-            "3. 如果使用了上下文中的具体数据，可以注明来源。"
+            "3. 如果使用了上下文中的具体数据，可以注明来源。\n"
+            "4. 这是多轮对话：若问题中出现指代或省略（如「该公司」「上面提到的」），"
+            "请结合历史对话理解。"
         )
+        # 生成仍使用原始问题：历史消息已注入，模型可自行消解指代
         user_prompt = f"上下文信息：\n{context}\n\n用户问题：{query}\n请回答："
 
         try:
@@ -462,6 +487,7 @@ class QASystem:
                 model=self.llm_model,
                 messages=[
                     {"role": "system", "content": system_prompt},
+                    *history_msgs,
                     {"role": "user", "content": user_prompt}
                 ],
                 temperature=0.1,

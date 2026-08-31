@@ -233,6 +233,8 @@ if prompt := st.chat_input("请输入你的问题..."):
     if st.session_state.qa is None:
         st.error("知识库尚未就绪，请先上传文档或检查配置。")
     else:
+        # 快照历史（在追加当前问题之前），供多轮对话上下文使用
+        history = [dict(m) for m in st.session_state.messages]
         # 记录用户消息
         st.session_state.messages.append({"role": "user", "content": prompt})
         with st.chat_message("user"):
@@ -242,7 +244,7 @@ if prompt := st.chat_input("请输入你的问题..."):
         with st.chat_message("assistant"):
             try:
                 answer = st.write_stream(
-                    _iter_async(st.session_state.qa.stream_answer(prompt, top_k=5))
+                    _iter_async(st.session_state.qa.stream_answer(prompt, top_k=5, history=history))
                 )
                 sources = st.session_state.qa.last_sources
                 chat_id = _save_chat(prompt, answer, st.session_state.qa.last_retrieved_contexts)

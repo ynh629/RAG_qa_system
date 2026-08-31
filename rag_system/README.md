@@ -125,12 +125,13 @@ rag_system/
 
 `QASystem` 类串联完整管线，位于应用层 `app/`：
 
-1. 混合检索召回候选集（默认 RRF 融合，top_k=20）
-2. BGE 重排序精选 top_k=5
-3. **Token 预算控制**：按 rerank 分数降序逐篇拼接，超预算即停止
-4. 调用 DeepSeek（默认 `deepseek-chat`，OpenAI 兼容接口）生成回答，temperature=0.1
-5. 返回答案 + 引用来源（标题路径、内容片段、rerank 分数）
-6. 支持 5 种检索模式：`full` / `vector_only` / `bm25_only` / `hybrid_no_rerank` / `vector_rerank`
+1. **多轮记忆**（可选传入 `history`）：裁剪最近几轮历史 + LLM 查询改写（消解指代/补全省略，改写仅用于检索，详见 `app/conversation.py`）
+2. 混合检索召回候选集（默认 RRF 融合，top_k=20，使用改写后的完整问题）
+3. BGE 重排序精选 top_k=5
+4. **Token 预算控制**：按 rerank 分数降序逐篇拼接，超预算即停止（历史 token 一并计入预算）
+5. 调用 DeepSeek（默认 `deepseek-chat`，OpenAI 兼容接口）生成回答，temperature=0.1，历史消息注入 LLM messages
+6. 返回答案 + 引用来源（标题路径、内容片段、rerank 分数）+ 改写后查询
+7. 支持 5 种检索模式：`full` / `vector_only` / `bm25_only` / `hybrid_no_rerank` / `vector_rerank`
 
 ### 异常处理（`common/exceptions.py`）
 
@@ -170,6 +171,8 @@ deepseek_api_key=your_deepseek_api_key
 # LLM_BASE_URL=https://api.deepseek.com/v1
 # LOG_LEVEL=INFO
 # API_PORT=8000
+# MAX_HISTORY_TURNS=5        # 多轮记忆保留轮数
+# HISTORY_TOKEN_BUDGET=1500  # 历史注入 LLM 的 token 预算
 ```
 
 ### 运行流程
@@ -202,9 +205,10 @@ python -m rag_system.tests.edge_case_test
 ### 验证脚本（scripts/）
 
 ```bash
-python scripts/smoke_test.py        # 包导入冒烟检查
-python scripts/verify_runtime.py    # 数据 + BM25 + 数据库功能验证
-python scripts/run_tests.py         # 运行边界测试（结果写入 UTF-8 日志）
+python scripts/smoke_test.py             # 包导入冒烟检查
+python scripts/smoke_test_memory.py      # 多轮记忆模块测试（不调真实 LLM）
+python scripts/verify_runtime.py         # 数据 + BM25 + 数据库功能验证
+python scripts/run_tests.py              # 运行边界测试（结果写入 UTF-8 日志）
 ```
 
 ## 技术栈
@@ -219,6 +223,7 @@ python scripts/run_tests.py         # 运行边界测试（结果写入 UTF-8 �
 | 嵌入模型 | BAAI/bge-small-zh-v1.5 |
 | 重排序模型 | BAAI/bge-reranker-base (CrossEncoder) |
 | 大模型 | DeepSeek（OpenAI 兼容接口） |
+| 多轮对话记忆 | 历史裁剪（轮数 + token 双上限）+ LLM 查询改写（`app/conversation.py`） |
 | Token 计算 | tiktoken |
 | 日志 | logging + RotatingFileHandler |
 | 评估 | RAGAS（faithfulness / relevancy / precision / recall / correctness） |
