@@ -8,8 +8,8 @@
 RAG_qa_system/
 ├── app/                     # ★ 应用/产品层（面向用户的集成入口）
 │   ├── main.py              # 统一启动入口：python -m app.main
-│   ├── api.py               # FastAPI 服务（/health /chat /feedback）
-│   ├── schemas.py           # API 请求/响应 Pydantic 模型
+│   ├── api.py               # FastAPI 服务（/health /chat /chat/stream(SSE) /feedback）
+│   ├── schemas.py           # API 请求/响应 Pydantic 模型（Literal/范围校验）
 │   ├── qa_system.py         # QASystem 编排层（召回→重排→生成→引用）
 │   ├── conversation.py      # ★ 多轮对话记忆（历史裁剪 + 检索查询改写）
 │   ├── models.py / database.py  # SQLAlchemy ORM 与数据库
@@ -34,6 +34,7 @@ RAG_qa_system/
 ├── scripts/                 # 开发辅助脚本
 │   ├── smoke_test.py        # 包导入冒烟检查
 │   ├── smoke_test_memory.py # 多轮记忆模块冒烟测试（不调真实 LLM）
+│   ├── test_rerank_scoring.py # 重排打分纯函数测试（sigmoid 归一化 + 滑窗，14 项）
 │   ├── verify_runtime.py    # 数据 + BM25 + 数据库功能验证
 │   └── run_tests.py         # 运行边界测试
 │
@@ -78,12 +79,15 @@ streamlit run app/streamlit_app.py
 |------|------|
 | 包导入冒烟检查 | `python scripts/smoke_test.py` |
 | 多轮记忆模块测试 | `python scripts/smoke_test_memory.py` |
+| 重排打分纯函数测试 | `python scripts/test_rerank_scoring.py`（sigmoid 归一化 + 滑窗切分，14 项） |
 | 运行时功能验证 | `python scripts/verify_runtime.py` |
 | 边界测试 | `python scripts/run_tests.py`（或 `python -m rag_system.tests.edge_case_test`） |
 | 解析 PDF 年报 | `python -m rag_system.parsing.parse_pdf` |
 | 切分对比实验 | `python -m rag_system.splitting.advanced_splitting` |
 | 构建评估数据集 | `python -m rag_system.evaluation.generate_qa_pairs` → `review_qa_pairs` |
 | RAGAS 多模式评估 | `python -m rag_system.evaluation.run_eval --compare` |
+| 生成评估对比图 | `python -m rag_system.evaluation.plot_compare`（从 CSV 均值绘柱状图 → `docs/eval_compare.png`） |
+| SSE 流式问答体验 | `curl -N -X POST http://localhost:8000/chat/stream -H "Content-Type: application/json" -d '{"query":"2025年净利润是多少"}'` |
 | 容器化部署 | `docker build -t rag-workspace . && docker run -p 8000:8000 -e deepseek_api_key=xxx rag-workspace` |
 | 启动 Streamlit 前端 | `streamlit run app/streamlit_app.py`（http://localhost:8501） |
 
@@ -99,40 +103,81 @@ streamlit run app/streamlit_app.py
 
 - **记忆裁剪**（`trim_history`）：双重上限——最近 `MAX_HISTORY_TURNS` 轮（默认 5）+ token 预算 `HISTORY_TOKEN_BUDGET`（默认 1500），超出从最旧丢弃，并剔除 sources/chat_id 等非 LLM 字段；
 - **查询改写**（`rewrite_query`）：改写只用于检索，生成仍用原始问题（历史已注入，模型可自行消解指代）；改写调用失败/超时/结果异常时自动回退原始问题，**可用性优先**；
-- **两路接入**：Streamlit 前端传入页面会话历史（`streamlit_app.py`）；API 侧 `/chat` 按 `session_id` 从 ChatHistory 表加载最近 5 轮（不传 `session_id` 则保持单轮行为，向后兼容）；
+- **两路接入**：Streamlit 前端传入页面会话历史（`streamlit_app.py`）；API 侧 `/chat` 与 `/chat/stream` 按 `session_id` 从 ChatHistory 表加载最近 5 轮（1 轮 = 一问一答 = 2 行，`limit` 按行数取；不传 `session_id` 则保持单轮行为，向后兼容）；
 - **成本**：每轮带历史的提问多一次改写调用（≤200 token、15s 超时）；历史 token 计入上下文预算，不会挤爆窗口。
 
 验证：`python scripts/smoke_test_memory.py`（裁剪/降级/改写等 7 项，不调真实 LLM）。
 
+## Web API 接口
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | `/health` | 健康检查（含 RAG 初始化状态） |
+| POST | `/chat` | 同步问答：完整 JSON 响应（answer + sources + chat_id）。同步 def 实现，FastAPI 自动放入线程池，LLM 长调用不阻塞事件循环 |
+| POST | `/chat/stream` | **SSE 流式问答**：逐段推送答案增量，结束后推送引用来源与 chat_id，并自动落库 |
+| POST | `/feedback` | 用户反馈落库（`feedback_type` 仅允许 `up`/`down`，`rating` 限 1~5） |
+
+### SSE 事件协议（`/chat/stream`）
+
+每帧均为 `data: {json}\n\n`：
+
+| 事件 type | 载荷 | 说明 |
+|------|------|------|
+| `delta` | `{"content": "增量文本"}` | 答案增量（通常为 token 或小片段） |
+| `sources` | `{"sources": [...]}` | 引用来源（title_path / 片段摘要 / rerank_score） |
+| `done` | `{"chat_id": 123}` | 结束信号：答案已落库，chat_id 可用于反馈关联 |
+| `error` | `{"detail": "..."}` | 中途异常（流内返回，HTTP 状态码仍为 200） |
+
+```bash
+# curl 体验（-N 禁用缓冲，逐帧可见）
+curl -N -X POST http://localhost:8000/chat/stream \
+  -H "Content-Type: application/json" \
+  -d '{"query": "2025年净利润是多少", "session_id": "s1"}'
+```
+
+前端接入提示：浏览器原生 `EventSource` 只支持 GET，POST 场景用 `fetch` + ReadableStream 解析；Streamlit 侧则进程内直连 `stream_answer` + `st.write_stream`（`streamlit_app.py`）。响应已设置 `X-Accel-Buffering: no`，经 Nginx 反代也不会被缓冲。
+
 ## 技术栈
 
-PDF 解析(Marker/PyMuPDF) · 文本切分(LangChain/语义) · BM25(jieba+rank_bm25) · 向量库(ChromaDB+BGE) · 重排序(BGE CrossEncoder) · 多轮记忆(历史裁剪+查询改写) · LLM(DeepSeek) · API(FastAPI+SQLAlchemy) · Web前端(Streamlit) · 评估(RAGAS) · 日志(logging RotatingFileHandler)
+PDF 解析(Marker/PyMuPDF) · 文本切分(LangChain/语义) · BM25(jieba+rank_bm25) · 向量库(ChromaDB+BGE) · 重排序(BGE CrossEncoder，sigmoid 归一化 + 滑窗打分) · 多轮记忆(历史裁剪+查询改写) · LLM(DeepSeek) · API(FastAPI+SQLAlchemy+SSE 流式) · Web前端(Streamlit) · 评估(RAGAS) · 日志(logging RotatingFileHandler)
 
 ## RAGAS 评估对比
 
 使用 [RAGAS](https://github.com/explodinggradients/ragas) 对 5 种检索模式进行了逐题评估与多模式对比（数据来源：`rag_system/data/eval_results_*.csv`）。
 
+> **重排序打分修正与复跑验证（2026-09）**：逐变量消融实验曾定位到重排模块两个打分缺陷——**logit 未归一化**（BGE CrossEncoder 输出原始 logit ±10，`min_score` 阈值语义错误）与**长片段头部截断**（>512 token 只取前 500 字符打分，信息丢失致排序失真）。修复方案（`rag_system/retrieval/rerank.py`）：数值稳定 sigmoid 归一化到 [0,1]；500 字符滑窗（50 重叠、最多 8 窗）逐窗打分取最大值。纯函数测试：`python scripts/test_rerank_scoring.py`（14 项全通过）。
+>
+> **复跑结果（下表）结论反转**：full 模式 5 项指标全面提升，从"正确性垫底"反转为 3 项第一——忠实度 +0.12、上下文精确率 +0.23、答案正确性 +0.13；两个含重排的模式包揽全部 5 项最佳。修复前后对比（full 模式）：
+>
+> | 指标 | 修复前 | 修复后 | 变化 |
+> |------|--------|--------|------|
+> | 忠实度 | 0.5909 | **0.7069** | +0.116 |
+> | 答案相关性 | 0.8804 | **0.9618** | +0.081 |
+> | 上下文精确率 | 0.5593 | **0.7903** | +0.231 |
+> | 上下文召回率 | 0.8333 | 0.8333 | — |
+> | 答案正确性 | 0.6367 | **0.7637** | +0.127 |
+
 **5 个评估指标**：忠实度（防幻觉）、答案相关性（切题）、上下文精确率（排序质量）、上下文召回率（召回完整性）、答案正确性（事实一致性）。
 
 ![RAGAS 多模式检索评估对比](docs/eval_compare.png)
 
-### 各模式指标均值
+### 各模式指标均值（重排序修复后复跑，2026-09）
 
 | 检索模式 | 忠实度 | 答案相关性 | 上下文精确率 | 上下文召回率 | 答案正确性 |
 |----------|--------|-----------|-------------|-------------|-----------|
-| full（混合检索+重排序） | 0.5909 | **0.8804** | 0.5593 | 0.8333 | 0.6367 |
-| vector_rerank（向量+重排序） | 0.5909 | 0.8722 | 0.6042 | 0.8333 | 0.6000 |
-| hybrid_no_rerank（混合检索，无重排） | 0.6528 | 0.8471 | 0.5681 | 0.8333 | 0.7067 |
-| vector_only（仅向量） | 0.6319 | 0.8306 | 0.6111 | 0.8333 | **0.7582** |
-| bm25_only（仅 BM25） | **0.7986** | 0.8613 | **0.6264** | 0.8333 | 0.6999 |
+| full（混合检索+重排序） | **0.7069** | **0.9618** | **0.7903** | 0.8333 | 0.7637 |
+| vector_rerank（向量+重排序） | 0.6657 | 0.9551 | 0.7407 | **0.9167** | **0.7910** |
+| hybrid_no_rerank（混合检索，无重排） | 0.6478 | 0.8753 | 0.6583 | 0.8333 | 0.7529 |
+| vector_only（仅向量） | 0.6181 | 0.8704 | 0.6528 | 0.8333 | 0.6887 |
+| bm25_only（仅 BM25） | 0.7014 | 0.8861 | 0.6472 | 0.8333 | 0.6403 |
 
 ### 结论与建议
 
-- **答案相关性**：完整管线 `full` 最高（0.88），混合检索 + 重排序对"答得准、答得贴合问题"最有利；
-- **忠实度 / 上下文精确率**：`bm25_only` 最高，年报中的数值、术语类问答对关键词精确匹配更敏感，BM25 能更精准地锁定来源片段；
-- **答案正确性**：`vector_only` 最高（0.76），与语义召回上下文更完整有关；
-- **上下文召回率**：5 种模式均为 0.83，说明召回源一致，模式间的差异主要来自排序与筛选策略；
-- **建议**：综合体验选 `full`（答案相关性第一、整体均衡）；对纯数值/术语类问答场景，可提高 BM25 权重或将 BM25 作为兜底通道；实际使用中可用本对比图数据按需切换 `retrieval_mode`。
+- **重排序价值得到验证**：两个含重排的模式（full / vector_rerank）包揽全部 5 项指标最佳——修复打分缺陷前重排是"负优化"（full 正确性 0.6367 垫底），修复后成为决定性增益（上下文精确率 0.79，比无重排模式高 0.13+）；
+- **full 综合最优**：忠实度、答案相关性、上下文精确率 3 项第一，且相关性 0.9618 显著领先——混合召回保证"找得全"，重排保证"排得准"，两者缺一不可；
+- **vector_rerank 的启示**：召回率 0.9167（唯一高于 0.83 的模式）与正确性 0.7910 均为最高，说明重排在纯语义召回上更聚焦；混合模式引入的 BM25 噪声略拉低正确性，但换来了忠实度与相关性——按场景权衡取舍；
+- **BM25 定位**：忠实度 0.7014 仅次于 full（数值/术语类问答来源锁定准），但语义扩展能力弱（正确性 0.6403 最低），适合作为混合召回的互补通道而非独立方案；
+- **工程结论**：默认 `retrieval_mode=full`；纯数值/术语问答可切 `vector_rerank`；生产调优优先保证重排打分语义正确（归一化 + 滑窗），这是本项目踩过的最深的坑。
 
 ## 阿里云部署（Docker Compose）
 
@@ -176,7 +221,9 @@ docker compose logs -f rag-api
 
 ## 下一步规划
 
-- 流式 SSE 接口（FastAPI 侧）、鉴权与限流
-- 向量库增量复用、多文档管理
+- ~~流式 SSE 接口（FastAPI 侧）~~ ✅ 已完成：`POST /chat/stream`（delta/sources/done/error 四类事件，流结束自动落库）
+- ~~重排序修复后复跑 RAGAS 评估~~ ✅ 已完成（2026-09）：full 模式 3 项指标第一，重排价值得到验证，对比表与 `docs/eval_compare.png` 已更新
+- SSE 并发安全：`last_sources` 改为随流返回（当前单实例安全）；检索/重排迁移 `run_in_executor` 或 AsyncOpenAI
+- 鉴权与限流、向量库增量复用、多文档管理
 - pytest 化 + CI、Alembic 迁移、监控指标、评估闭环回灌
 - 记忆增强：对话摘要压缩（超长历史蒸馏为摘要）、按 session 的向量记忆库

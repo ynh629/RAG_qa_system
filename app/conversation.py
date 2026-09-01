@@ -19,18 +19,33 @@ MAX_HISTORY_TURNS = settings.MAX_HISTORY_TURNS
 HISTORY_TOKEN_BUDGET = settings.HISTORY_TOKEN_BUDGET
 
 
+# tiktoken 编码器懒加载单例（首次调用初始化，失败则永久退化为字符估算）
+_ENCODER = None
+_ENCODER_TRIED = False
+
+
+def _get_encoder():
+    global _ENCODER, _ENCODER_TRIED
+    if not _ENCODER_TRIED:
+        _ENCODER_TRIED = True
+        try:
+            import tiktoken
+            _ENCODER = tiktoken.get_encoding("cl100k_base")
+        except Exception:
+            _ENCODER = None
+    return _ENCODER
+
+
 def estimate_tokens(text: str) -> int:
     """
     估算文本的 token 数。
     优先使用 tiktoken（若已安装），否则退化为字符数估算（中文约 1.5 字符 ≈ 1 token）。
     """
-    try:
-        import tiktoken
-        enc = tiktoken.get_encoding("cl100k_base")
+    enc = _get_encoder()
+    if enc is not None:
         return len(enc.encode(text))
-    except Exception:
-        # 中文场景：约 1.5 字符 ≈ 1 token，保守估算
-        return int(len(text) / 1.5)
+    # 中文场景：约 1.5 字符 ≈ 1 token，保守估算
+    return int(len(text) / 1.5)
 
 
 def history_tokens(messages: List[Dict]) -> int:

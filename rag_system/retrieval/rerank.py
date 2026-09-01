@@ -1,6 +1,6 @@
 # rerank.py
 import os
-import numpy as np
+import math
 from typing import List, Dict, Optional
 from sentence_transformers import CrossEncoder
 
@@ -22,7 +22,40 @@ DATA_JSON = os.path.join(BASE_DIR, "data", "structured_segments.json")
 logger = get_logger(__name__)
 
 # CrossEncoder 模型的最大输入 token 数（BGE-reranker-base 为 512）
-MAX_RERANK_CHARS = 500
+# 滑窗打分参数：窗口即单次打分的最大字符数，带重叠防边界截断，上限防超长文档打分爆炸
+RERANK_WINDOW_CHARS = 500
+RERANK_WINDOW_OVERLAP = 50
+RERANK_MAX_WINDOWS = 8
+
+
+def _sigmoid(x: float) -> float:
+    """数值稳定的 sigmoid：把 CrossEncoder 原始 logit 映射为 [0,1] 相关性概率。
+
+    BGE CrossEncoder 输出的是原始 logit（范围约 -10 ~ +10），不是 0-1 概率；
+    不归一化直接设阈值会导致过滤语义错误（logit 0.5 与概率 0.5 完全不同）。
+    """
+    if x >= 0:
+        return 1.0 / (1.0 + math.exp(-x))
+    e = math.exp(x)
+    return e / (1.0 + e)
+
+
+def _split_windows(
+    text: str,
+    window: int = RERANK_WINDOW_CHARS,
+    overlap: int = RERANK_WINDOW_OVERLAP,
+    max_windows: int = RERANK_MAX_WINDOWS,
+) -> List[str]:
+    """把超长文档切成带重叠的滑窗。
+
+    解决 512 token 截断导致长片段后半段信息丢失的问题：
+    逐窗与 query 配对打分，取最大分作为文档得分。
+    """
+    if len(text) <= window:
+        return [text]
+    step = window - overlap
+    windows = [text[i:i + window] for i in range(0, len(text), step)]
+    return windows[:max_windows]
 
 
 class Reranker:
@@ -89,7 +122,8 @@ class Reranker:
             query: 用户查询
             candidates: 候选文档列表
             top_k: 返回的 top_k 个文档
-            min_score: 质量阈值，rerank 分数低于此值的文档将被过滤（可选）
+            min_score: 质量阈值（0~1 相关性概率，bge 后端经 sigmoid 归一化），
+                低于此值的文档将被过滤（可选，None 表示不过滤）
 
         返回：
             重排序后的文档列表
@@ -101,29 +135,37 @@ class Reranker:
         documents = [c["text"] for c in candidates]
 
         if self.backend == "bge":
-            # 构造 (query, doc) 对，CrossEncoder 输入格式
-            # 对超长文本截断，避免超过模型 512 token 限制
-            truncated_docs = []
+            # 滑窗打分：短文档退化为单窗（与旧版行为一致），长文档逐窗打分取最大值，
+            # 避免头部截断导致后半段信息丢失（512 token 上限的根治方案）。
+            doc_windows = []
+            pairs = []
             for doc in documents:
-                if len(doc) > MAX_RERANK_CHARS:
-                    logger.warning(
-                        "文档过长（%d 字符），截断到 %d 字符", len(doc), MAX_RERANK_CHARS
+                windows = _split_windows(doc)
+                if len(windows) > 1:
+                    logger.info(
+                        "文档过长（%d 字符），滑窗打分（%d 窗）", len(doc), len(windows)
                     )
-                    truncated_docs.append(doc[:MAX_RERANK_CHARS])
-                else:
-                    truncated_docs.append(doc)
-
-            pairs = [[query, doc] for doc in truncated_docs]
+                doc_windows.append(windows)
+                pairs.extend([query, w] for w in windows)
             try:
-                # 预测相关性分数（logits），可直接视为相似度
-                scores = self.model.predict(pairs)
-                scores = [float(s) for s in scores]
+                raw_scores = self.model.predict(pairs)
             except Exception as e:
                 raise RerankError(
                     "BGE Reranker 预测失败",
-                    code="RERANK_PREDICT_ERROR",
+                    code="RERANK_PREDICTION_ERROR",
                     detail=str(e)
                 )
+
+            # 逐文档聚合：sigmoid 归一化后取窗口最大值作为文档相关性概率
+            scores = []
+            pos = 0
+            for windows in doc_windows:
+                n = len(windows)
+                doc_score = max(
+                    _sigmoid(float(s)) for s in raw_scores[pos:pos + n]
+                )
+                scores.append(doc_score)
+                pos += n
         elif self.backend == "cohere":
             # 调用 Cohere Rerank API
             try:

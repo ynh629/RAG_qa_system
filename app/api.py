@@ -1,5 +1,6 @@
 import os
 import sys
+import json
 
 # 确保项目根目录在 sys.path，使直接运行 python app/api.py 也能正常导入
 ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -10,7 +11,7 @@ from contextlib import asynccontextmanager
 from typing import Dict, List
 
 from fastapi import FastAPI, HTTPException, Depends
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from sqlalchemy.orm import Session
 
 # 导入 RAG 系统初始化函数
@@ -67,12 +68,15 @@ async def http_exception_handler(request, exc):
 
 # ---------- 路由 ----------
 def _load_history(db: Session, session_id: str, max_turns: int = 5) -> List[Dict]:
-    """按 session_id 从 ChatHistory 加载最近几轮问答，构造多轮上下文消息。"""
+    """按 session_id 从 ChatHistory 加载最近几轮问答，构造多轮上下文消息。
+
+    注意：1 轮 = 一问一答 = 2 行记录，limit 需按 max_turns * 2 取行。
+    """
     rows = (
         db.query(ChatHistory)
         .filter(ChatHistory.session_id == session_id)
         .order_by(ChatHistory.id.desc())
-        .limit(max_turns)
+        .limit(max_turns * 2)
         .all()
     )
     rows.reverse()  # 时间正序
@@ -91,8 +95,12 @@ async def health_check():
 
 
 @app.post("/chat", response_model=ChatResponse, tags=["问答"])
-async def chat_endpoint(request: ChatRequest, db: Session = Depends(get_db)):
-    """问答接口：RAG 回答 + 保存对话历史"""
+def chat_endpoint(request: ChatRequest, db: Session = Depends(get_db)):
+    """问答接口：RAG 回答 + 保存对话历史。
+
+    同步 def（非 async）：answer() 内含同步阻塞的 LLM 调用（5~15s），
+    FastAPI 会自动放入线程池执行，避免阻塞事件循环拖垮 /health 等轻量端点。
+    """
     if qa_system_instance is None:
         raise HTTPException(status_code=503, detail="系统尚未初始化完成，请稍后重试")
 
@@ -130,6 +138,71 @@ async def chat_endpoint(request: ChatRequest, db: Session = Depends(get_db)):
         chat_id=history.id
     )
     return response
+
+
+def _sse(payload: dict) -> str:
+    """把字典编码为一帧 SSE 数据（data: {...}\\n\\n）。"""
+    return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+
+
+@app.post("/chat/stream", tags=["问答"])
+async def chat_stream(request: ChatRequest, db: Session = Depends(get_db)):
+    """流式问答（SSE）：逐段推送答案增量，结束时推送引用来源与 chat_id。
+
+    事件协议（每帧均为 data: {json}）：
+        {"type": "delta",   "content": "增量文本"}
+        {"type": "sources", "sources": [...]}          # 引用来源
+        {"type": "done",    "chat_id": 123}             # 结束信号，携带落库 ID
+        {"type": "error",   "detail": "..."}            # 中途异常
+    """
+    if qa_system_instance is None:
+        raise HTTPException(status_code=503, detail="系统尚未初始化完成，请稍后重试")
+
+    history = _load_history(db, request.session_id) if request.session_id else []
+
+    async def event_gen():
+        parts = []
+        try:
+            # stream_answer 在 LLM 生成前写入实例属性 last_sources / last_retrieved_contexts，
+            # 流结束后读取；单实例部署下安全（多实例需改为随流返回）
+            async for chunk in qa_system_instance.stream_answer(
+                query=request.query,
+                top_k=request.top_k,
+                include_sources=request.include_sources,
+                history=history,
+            ):
+                parts.append(chunk)
+                yield _sse({"type": "delta", "content": chunk})
+        except Exception as e:
+            yield _sse({"type": "error", "detail": str(e)})
+            return
+
+        sources = getattr(qa_system_instance, "last_sources", [])
+        contexts = getattr(qa_system_instance, "last_retrieved_contexts", [])
+
+        # 与 /chat 相同的落库逻辑：保存完整答案，供多轮上下文与反馈关联
+        row = ChatHistory(
+            user_id=request.user_id or "anonymous",
+            session_id=request.session_id or "default",
+            query=request.query,
+            answer="".join(parts),
+            retrieved_contexts="\n\n".join(contexts),
+        )
+        db.add(row)
+        db.commit()
+        db.refresh(row)
+
+        yield _sse({"type": "sources", "sources": sources})
+        yield _sse({"type": "done", "chat_id": row.id})
+
+    return StreamingResponse(
+        event_gen(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",  # 禁用 Nginx 缓冲，保证逐帧到达
+        },
+    )
 
 
 @app.post("/feedback", tags=["反馈"])

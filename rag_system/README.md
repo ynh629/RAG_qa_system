@@ -119,7 +119,7 @@ rag_system/
 - **BM25**：jieba 中文分词 + `rank_bm25` 关键词检索，支持空查询保护、无匹配兜底
 - **向量**：ChromaDB 持久化 + `BAAI/bge-small-zh-v1.5` 嵌入，支持索引构建与增量获取（`get_or_create_collection`）
 - **融合策略**：`weighted`（分数归一化加权求和，默认向量 0.6 + BM25 0.4）或 `rrf`（倒数排名融合，k=60）
-- **重排序**：`bge`（本地 `BAAI/bge-reranker-base` CrossEncoder）或 `cohere`（API），支持超长截断与质量阈值过滤
+- **重排序**：`bge`（本地 `BAAI/bge-reranker-base` CrossEncoder）或 `cohere`（API）。bge 后端输出经 **sigmoid 归一化到 [0,1]**（原始 logit 不可直接比较），超 512 token 长片段采用 **500 字符滑窗（50 重叠，最多 8 窗）逐窗打分取最大值**，取代旧的头部截断；支持质量阈值 `min_score` 过滤（语义为"相关性概率过半"，默认 0.5）
 
 ### 问答系统（`app/qa_system.py`）
 
@@ -207,6 +207,7 @@ python -m rag_system.tests.edge_case_test
 ```bash
 python scripts/smoke_test.py             # 包导入冒烟检查
 python scripts/smoke_test_memory.py      # 多轮记忆模块测试（不调真实 LLM）
+python scripts/test_rerank_scoring.py    # 重排打分纯函数测试（sigmoid + 滑窗，14 项）
 python scripts/verify_runtime.py         # 数据 + BM25 + 数据库功能验证
 python scripts/run_tests.py              # 运行边界测试（结果写入 UTF-8 日志）
 ```

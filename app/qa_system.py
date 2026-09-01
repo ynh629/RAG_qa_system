@@ -371,6 +371,7 @@ class QASystem:
         query: str,
         top_k: int = 5,
         include_sources: bool = True,
+        min_rerank_score: Optional[float] = 0.5,  # 质量阈值，与 answer() 保持一致
         history: Optional[List[Dict]] = None,  # 多轮对话历史（OpenAI messages 格式）
     ) -> AsyncGenerator[str, None]:
         """
@@ -413,7 +414,9 @@ class QASystem:
         # ---- 步骤2：重排序 ----
         if self.retrieval_mode in RERANK_MODES:
             try:
-                reranked_docs = self.reranker.rerank(search_query, candidates, top_k=top_k)
+                reranked_docs = self.reranker.rerank(
+                    search_query, candidates, top_k=top_k, min_score=min_rerank_score
+                )
             except Exception as e:
                 logger.error("重排序失败: %s", e, exc_info=True)
                 yield "重排序过程中出现错误，请稍后重试。"

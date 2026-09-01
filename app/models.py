@@ -1,10 +1,10 @@
 # models.py
 from sqlalchemy import Column, Integer, String, Text, Float, DateTime, Boolean, ForeignKey
-from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.orm import declarative_base
 from sqlalchemy.sql import func
 from datetime import datetime
 
-# 创建 Base 类，所有模型都要继承它
+# 创建 Base 类，所有模型都要继承
 Base = declarative_base()
 
 class ChatHistory(Base):

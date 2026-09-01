@@ -1,6 +1,6 @@
 # schemas.py
 """API 请求/响应 Pydantic 模型。"""
-from typing import Optional, List
+from typing import Optional, List, Literal
 
 from pydantic import BaseModel, Field
 
@@ -30,6 +30,6 @@ class ChatResponse(BaseModel):
 class FeedbackRequest(BaseModel):
     """反馈请求体"""
     chat_id: int
-    feedback_type: str  # 'up' 或 'down'
-    comment: Optional[str] = None
-    rating: Optional[int] = None
+    feedback_type: Literal["up", "down"]  # 只允许赞 / 踩
+    comment: Optional[str] = Field(None, max_length=2000)
+    rating: Optional[int] = Field(None, ge=1, le=5)  # 1~5 星，可选
