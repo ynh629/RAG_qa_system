@@ -13,6 +13,7 @@ if ROOT_DIR not in sys.path:
 
 from rag_system.common.logging_config import get_logger
 from rag_system.common.exceptions import RerankError, ConfigError
+from rag_system.retrieval.model_paths import resolve_model
 
 # rag_system 包根目录（retrieval 的上一级）
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -75,7 +76,7 @@ class Reranker:
             # 加载 CrossEncoder 模型（专门用于文本对评分）
             try:
                 logger.info("正在加载 BGE Reranker 模型: %s", model_name)
-                self.model = CrossEncoder(model_name)
+                self.model = CrossEncoder(resolve_model(model_name))
                 logger.info("BGE Reranker 模型加载完成")
             except Exception as e:
                 raise RerankError(

@@ -27,6 +27,9 @@ services:
       - LLM_BASE_URL=${LLM_BASE_URL:-https://api.deepseek.com/v1}
       - LLM_API_KEY_ENV=${LLM_API_KEY_ENV:-deepseek_api_key}
       - TZ=${TZ:-Asia/Shanghai}
+      # 离线模式：模型从 hf_cache 本地缓存加载，冷启动不依赖 hf-mirror（换新模型时设 0）
+      - HF_HUB_OFFLINE=${HF_HUB_OFFLINE:-1}
+      - TRANSFORMERS_OFFLINE=${TRANSFORMERS_OFFLINE:-1}
     volumes:
       - rag_api_data:/workspace/rag_system/data          # 知识库数据/上传文件
       - rag_api_chroma:/workspace/rag_system/chroma_db   # Chroma 向量库
@@ -50,6 +53,9 @@ services:
       - LLM_BASE_URL=${LLM_BASE_URL:-https://api.deepseek.com/v1}
       - LLM_API_KEY_ENV=${LLM_API_KEY_ENV:-deepseek_api_key}
       - TZ=${TZ:-Asia/Shanghai}
+      # 离线模式：模型从 hf_cache 本地缓存加载，冷启动不依赖 hf-mirror（换新模型时设 0）
+      - HF_HUB_OFFLINE=${HF_HUB_OFFLINE:-1}
+      - TRANSFORMERS_OFFLINE=${TRANSFORMERS_OFFLINE:-1}
     volumes:
       - rag_web_data:/workspace/rag_system/data          # 知识库数据/上传文件
       - rag_web_chroma:/workspace/rag_system/chroma_db   # Chroma 向量库

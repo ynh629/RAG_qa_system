@@ -13,6 +13,7 @@ if ROOT_DIR not in sys.path:
 
 from rag_system.common.logging_config import get_logger
 from rag_system.common.exceptions import DocumentError, IndexError_
+from rag_system.retrieval.model_paths import resolve_model
 
 # rag_system 包根目录（retrieval 的上一级）
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -82,9 +83,9 @@ def build_chroma_index(segments: List[Dict], collection_name: str = "annual_repo
             detail=str(e)
         )
 
-    # 定义 embedding 函数（使用 BGE 中文小模型，首次会自动下载）
+    # 定义 embedding 函数（BGE 中文小模型；resolve_model 优先取本地缓存，离线可用）
     embedding_fn = embedding_functions.SentenceTransformerEmbeddingFunction(
-        model_name="BAAI/bge-small-zh-v1.5"
+        model_name=resolve_model("BAAI/bge-small-zh-v1.5")
     )
 
     # 如果 collection 已存在，先删除（可选，这里为了重建）
@@ -156,7 +157,7 @@ def get_or_create_collection(collection_name: str = "annual_report"):
         )
 
     embedding_fn = embedding_functions.SentenceTransformerEmbeddingFunction(
-        model_name="BAAI/bge-small-zh-v1.5"
+        model_name=resolve_model("BAAI/bge-small-zh-v1.5")
     )
 
     try:

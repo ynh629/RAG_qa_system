@@ -79,6 +79,7 @@ streamlit run app/streamlit_app.py
 |------|------|
 | 包导入冒烟检查 | `python scripts/smoke_test.py` |
 | 多轮记忆模块测试 | `python scripts/smoke_test_memory.py` |
+| ModelScope 预下载模型 | 容器内 `pip install -q modelscope -i https://mirrors.aliyun.com/pypi/simple/ && python scripts/download_models.py`（国内 ECS 专用，下载后离线加载） |
 | 重排打分纯函数测试 | `python scripts/test_rerank_scoring.py`（sigmoid 归一化 + 滑窗切分，14 项） |
 | 运行时功能验证 | `python scripts/verify_runtime.py` |
 | 边界测试 | `python scripts/run_tests.py`（或 `python -m rag_system.tests.edge_case_test`） |
@@ -205,6 +206,7 @@ docker compose logs -f rag-api
 |----|------|
 | `deepseek_api_key` | 必填，DeepSeek API 密钥（[平台](https://platform.deepseek.com/)） |
 | `HF_ENDPOINT` | 默认 `https://hf-mirror.com`。国内 ECS 无法直连 HuggingFace，BGE 嵌入/重排模型从该镜像站下载 |
+| `HF_HUB_OFFLINE` / `TRANSFORMERS_OFFLINE` | 默认 `1`：模型从 `hf_cache` 本地缓存离线加载，冷启动不依赖 hf-mirror（曾因镜像站抖动导致初始化卡死）。换新模型时临时设 `0`，并先跑 ModelScope 下载脚本 |
 | `MAX_HISTORY_TURNS` | 可选，多轮记忆保留轮数（默认 5，1 轮 = 一问一答） |
 | `HISTORY_TOKEN_BUDGET` | 可选，历史注入 LLM 的 token 预算（默认 1500，超出丢最旧） |
 | 数据卷 | rag-api / rag-web 各自独立挂载 data、chroma_db、SQLite、logs（避免 ChromaDB/SQLite 并发写锁冲突）；`hf_cache` 卷共享模型缓存 |
